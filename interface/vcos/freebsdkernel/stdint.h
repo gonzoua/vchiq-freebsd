@@ -17,34 +17,15 @@
  */
 
 /*=============================================================================
-VideoCore OS Abstraction Layer - public header file
+VideoCore OS fAbstraction Layer - stdint.h C standard header
 =============================================================================*/
 
-#ifndef VCOS_CTYPE_H
-#define VCOS_CTYPE_H
+#ifndef _VCOS_PLATFORM_LINUX_STDINT_H
+#define _VCOS_PLATFORM_LINUX_STDINT_H
 
-/**
-  * \file
-  *
-  * ctype functions.
-  *
-  */
+/* The Linux kernel does not have a <stdint.h> so we have to provide one of
+   our own. */
 
-#ifdef __linux__
-#ifdef __KERNEL__
-#include <linux/ctype.h>
-#else
-#include <ctype.h>
-#endif
-#endif
+#include <sys/types.h> /* includes integer types */
 
-#ifdef __FreeBSD__
-#ifdef _KERNEL
-#include <sys/ctype.h>
-#else
-#include <ctype.h>
-#endif
-#endif
-
-#endif
-
+#endif /* _VCOS_PLATFORM_LINUX_STDINT_H */

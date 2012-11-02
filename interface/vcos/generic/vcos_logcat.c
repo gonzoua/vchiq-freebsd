@@ -279,7 +279,9 @@ static int read_tok(char *tok, size_t toklen, const char **pstr, char sep)
 
    while ((ch = *str) != '\0' &&
           ch != sep &&
+#ifdef notyet
           (isalnum((int)ch) || (ch == '_')) &&
+#endif
           n != toklen-1)
    {
       tok[n++] = ch;

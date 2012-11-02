@@ -17,34 +17,42 @@
  */
 
 /*=============================================================================
-VideoCore OS Abstraction Layer - public header file
+VideoCore OS Abstraction Layer - platform-specific types and defines
 =============================================================================*/
 
-#ifndef VCOS_CTYPE_H
-#define VCOS_CTYPE_H
+#ifndef VCOS_PLATFORM_TYPES_H
+#define VCOS_PLATFORM_TYPES_H
 
-/**
-  * \file
-  *
-  * ctype functions.
-  *
-  */
+#include <sys/types.h>
+#include <sys/stddef.h>
+#include <sys/systm.h>
 
-#ifdef __linux__
-#ifdef __KERNEL__
-#include <linux/ctype.h>
+#define VCOSPRE_ extern
+#define VCOSPOST_
+
+#if defined(__GNUC__) && (( __GNUC__ > 2 ) || (( __GNUC__ == 2 ) && ( __GNUC_MINOR__ >= 3 )))
+#define VCOS_FORMAT_ATTR_(ARCHETYPE, STRING_INDEX, FIRST_TO_CHECK)  __attribute__ ((format (ARCHETYPE, STRING_INDEX, FIRST_TO_CHECK)))
 #else
-#include <ctype.h>
-#endif
-#endif
-
-#ifdef __FreeBSD__
-#ifdef _KERNEL
-#include <sys/ctype.h>
-#else
-#include <ctype.h>
-#endif
+#define VCOS_FORMAT_ATTR_(ARCHETYPE, STRING_INDEX, FIRST_TO_CHECK)
 #endif
 
+#if !defined( __STDC_VERSION__ )
+#define __STDC_VERSION__ 199901L
 #endif
 
+#if !defined( __STDC_VERSION )
+#define __STDC_VERSION   __STDC_VERSION__
+#endif
+
+static inline void __vcos_bkpt( void ) { panic("__vcos_bkpt"); }
+#define VCOS_BKPT __vcos_bkpt()
+
+#define VCOS_ASSERT_MSG(...) printf( "vcos_assert: " __VA_ARGS__ )
+
+#define PRId64 "lld"
+#define PRIi64 "lli"
+#define PRIo64 "llo"
+#define PRIu64 "llu"
+#define PRIx64 "llx"
+
+#endif

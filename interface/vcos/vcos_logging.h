@@ -27,7 +27,7 @@ VideoCore OS Abstraction Layer - logging support
 extern "C" {
 #endif
 
-#include <stdarg.h>
+#include <machine/stdarg.h>
 
 #include "interface/vcos/vcos_types.h"
 #include "vcos_platform.h"
