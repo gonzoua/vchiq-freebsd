@@ -22,7 +22,11 @@
 
 #include "vchiq_util.h"
 
+#ifdef __FreeBSD__
+#include <sys/stddef.h>
+#else
 #include <stddef.h>
+#endif
 
 #if defined(__KERNEL__)
 #include <linux/module.h>
