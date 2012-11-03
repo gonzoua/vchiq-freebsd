@@ -57,13 +57,13 @@ typedef struct vchiq_arm_state_struct {
 
 extern VCOS_LOG_CAT_T vchiq_arm_log_category;
 
-extern int __init
+extern int 
 vchiq_platform_vcos_init(void);
 
-extern int __init
+extern int
 vchiq_platform_init(VCHIQ_STATE_T *state);
 
-extern void __exit
+extern void
 vchiq_platform_exit(VCHIQ_STATE_T *state);
 
 extern VCHIQ_STATE_T *
