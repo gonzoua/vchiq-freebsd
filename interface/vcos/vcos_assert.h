@@ -258,10 +258,14 @@ extern void logging_assert(const char *file, const char *func, int line, const c
 #endif /* !defined(NDEBUG) */
 
 #ifndef vcos_static_assert
+#ifdef __FreeBSD__
+#define vcos_static_assert(cond) CTASSERT(cond)
+#else
 #if defined(__GNUC__)
 #define vcos_static_assert(cond) __attribute__((unused)) extern int vcos_static_assert[(cond)?1:-1]
 #else
 #define vcos_static_assert(cond) extern int vcos_static_assert[(cond)?1:-1]
+#endif
 #endif
 #endif
 

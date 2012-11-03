@@ -18,8 +18,10 @@
 
 #include "vchiq_util.h"
 
+#if !defined(__FreeBSD__)
 #if !defined(__KERNEL__)
 #include <stdlib.h>
+#endif
 #endif
 
 static __inline int is_pow2(int i)
