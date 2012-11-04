@@ -16,8 +16,6 @@
 #ifndef VCOS_THREAD_MAP_H
 #define VCOS_THREAD_MAP_H
 
-#include <linux/string.h>
-
 #include "vcos_platform.h"
 
 static inline void vcos_thread_map_init(void)
@@ -32,7 +30,7 @@ static inline void vcos_thread_map_cleanup(void)
 
 uint32_t vcos_add_thread(VCOS_THREAD_T *vcos_thread);
 
-uint32_t vcos_remove_thread(struct task_struct *thread_id);
+uint32_t vcos_remove_thread(struct thread *thread_id);
 
 VCOS_THREAD_T *vcos_kthread_current(void);
 
