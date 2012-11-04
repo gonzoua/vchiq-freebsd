@@ -36,6 +36,9 @@ VideoCore OS Abstraction Layer - Linux kernel (partial) implementation.
 #include <sys/lock.h>
 #include <sys/sema.h>
 #include <sys/mutex.h>
+#include <sys/kernel.h>
+#include <sys/proc.h>
+#include <sys/malloc.h>
 
 #define VCOS_HAVE_RTOS         1
 #define VCOS_HAVE_SEMAPHORE    1
@@ -73,7 +76,7 @@ typedef volatile int          VCOS_ONCE_T;
 
 typedef unsigned int          VCOS_UNSIGNED;
 typedef unsigned int          VCOS_OPTION;
-typedef volatile int          VCOS_ATOMIC_FLAGS_T;
+typedef volatile uint32_t     VCOS_ATOMIC_FLAGS_T;
 
 typedef struct
 {
@@ -152,21 +155,15 @@ void  vcos_platform_free( void *ptr );
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_wait(VCOS_SEMAPHORE_T *sem) {
-   int ret = down_interruptible(sem);
-   if ( ret == 0 )
-      /* Success */
-      return VCOS_SUCCESS;
-   else if ( ret == -EINTR )
-      /* Interrupted */
-      return VCOS_EINTR;
-   else
-      /* Default (timeout) */
-      return VCOS_EAGAIN;
+   sema_wait(sem);
+   /* XXXBSD: how about interruptible */
+
+   return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_trywait(VCOS_SEMAPHORE_T *sem) {
-   if (down_trylock(sem) != 0)
+   if (sema_trywait(sem) == 0)
       return VCOS_EAGAIN;
    return VCOS_SUCCESS;
 }
@@ -175,17 +172,18 @@ VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_create(VCOS_SEMAPHORE_T *sem,
                                     const char *name,
                                     VCOS_UNSIGNED initial_count) {
-   sema_init(sem, initial_count);
+   sema_init(sem, initial_count, name);
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_semaphore_delete(VCOS_SEMAPHORE_T *sem) {
+   sema_destroy(sem);
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_post(VCOS_SEMAPHORE_T *sem) {
-   up(sem);
+   sema_post(sem);
    return VCOS_SUCCESS;
 }
 
@@ -209,7 +207,7 @@ void vcos_llthread_resume(VCOS_LLTHREAD_T *thread) {
 
 VCOS_INLINE_IMPL
 void vcos_sleep(uint32_t ms) {
-   msleep(ms);
+   pause("vcos_sleep", ms);
 }
 
 VCOS_INLINE_IMPL
@@ -242,45 +240,40 @@ int vcos_strcasecmp(const char *s1, const char *s2) {
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_mutex_create(VCOS_MUTEX_T *m, const char *name) {
-   mutex_init(m);
+   mtx_init(m, name, NULL, MTX_DEF);
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_mutex_delete(VCOS_MUTEX_T *m) {
+   mtx_destroy(m);
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_mutex_lock(VCOS_MUTEX_T *m) {
-   int ret = mutex_lock_interruptible(m);
-   if ( ret == 0 )
-      /* Success */
-      return VCOS_SUCCESS;
-   else if ( ret == -EINTR )
-      /* Interrupted */
-      return VCOS_EINTR;
-   else
-      /* Default */
-      return VCOS_EAGAIN;
+   mtx_lock(m);
+
+   return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_mutex_unlock(VCOS_MUTEX_T *m) {
-   mutex_unlock(m);
+   mtx_unlock(m);
 }
 
 VCOS_INLINE_IMPL
 int vcos_mutex_is_locked(VCOS_MUTEX_T *m) {
-   if (mutex_trylock(m) != 0)
-      return 1; /* it was locked */
-   mutex_unlock(m);
-   /* it wasn't locked */
-   return 0;
+   if (mtx_trylock(m) != 0) {
+      mtx_unlock(m);
+      /* it wasn't locked */
+      return 0;
+   }
+   return 1; /* it was locked */
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_mutex_trylock(VCOS_MUTEX_T *m) {
-   if (mutex_trylock(m) == 0)
+   if (mtx_trylock(m) != 0)
       return VCOS_SUCCESS;
    else
       return VCOS_EAGAIN;
@@ -307,40 +300,34 @@ void _vcos_thread_sem_post(VCOS_THREAD_T *target) {
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_event_create(VCOS_EVENT_T *event, const char *debug_name)
 {
-   sema_init(event, 0);
+   sema_init(event, 0, debug_name);
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_event_signal(VCOS_EVENT_T *event)
 {
-   up(event);
+   sema_post(event);
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_event_wait(VCOS_EVENT_T *event)
 {
-   int ret = down_interruptible(event);
-   if ( ret == -EINTR )
-      /* Interrupted */
-      return VCOS_EINTR;
-   else if (ret != 0)
-      /* Default (timeout) */
-      return VCOS_EAGAIN;
-   /* Emulate a maximum count of 1 by removing any extra upness */
-   while (down_trylock(event) == 0) continue;
+   sema_wait(event);
+   /* XXXBSD: while (down_trylock(event) == 0) continue; */
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_DECL
 VCOS_STATUS_T vcos_event_try(VCOS_EVENT_T *event)
 {
-   return (down_trylock(event) == 0) ? VCOS_SUCCESS : VCOS_EAGAIN;
+   return (sema_trywait(event) != 0) ? VCOS_SUCCESS : VCOS_EAGAIN;
 }
 
 VCOS_INLINE_IMPL
 void vcos_event_delete(VCOS_EVENT_T *event)
 {
+   sema_destroy(event);
 }
 
 /***********************************************************
@@ -350,7 +337,7 @@ void vcos_event_delete(VCOS_EVENT_T *event)
  ***********************************************************/
 
 VCOS_INLINE_DECL
-void vcos_timer_linux_func(unsigned long data)
+void vcos_timer_freebsd_func(void *data)
 {
     VCOS_TIMER_T    *vcos_timer = (VCOS_TIMER_T *)data;
 
@@ -362,53 +349,53 @@ VCOS_STATUS_T vcos_timer_create(VCOS_TIMER_T *timer,
                                 const char *name,
                                 void (*expiration_routine)(void *context),
                                 void *context) {
-	init_timer(&timer->linux_timer);
-	timer->linux_timer.data = (unsigned long)timer;
-	timer->linux_timer.function = vcos_timer_linux_func;
+   callout_init(&timer->callout, CALLOUT_MPSAFE);
 
-    timer->context = context;
-    timer->expiration_routine = expiration_routine;
+   timer->context = context;
+   timer->expiration_routine = expiration_routine;
 
     return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_timer_set(VCOS_TIMER_T *timer, VCOS_UNSIGNED delay_ms) {
-	timer->linux_timer.expires = jiffies + msecs_to_jiffies(delay_ms);
-       add_timer(&timer->linux_timer);
+   /* XXXBSD: tvtohz? */
+   callout_reset(&timer->callout, hz*1000/delay_ms, vcos_timer_freebsd_func, timer);
 }
 
 VCOS_INLINE_IMPL
 void vcos_timer_cancel(VCOS_TIMER_T *timer) {
-     del_timer(&timer->linux_timer);
+   callout_stop(&timer->callout);
 }
 
 VCOS_INLINE_IMPL
 void vcos_timer_reset(VCOS_TIMER_T *timer, VCOS_UNSIGNED delay_ms) {
-    del_timer_sync(&timer->linux_timer);
-    timer->linux_timer.expires = jiffies + msecs_to_jiffies(delay_ms);
-    add_timer(&timer->linux_timer);
+   callout_drain(&timer->callout);
+   /* XXXBSD: tvtohz? */
+   callout_reset(&timer->callout, hz*1000/delay_ms, vcos_timer_freebsd_func, timer);
 }
 
 VCOS_INLINE_IMPL
 void vcos_timer_delete(VCOS_TIMER_T *timer) {
+    callout_drain(&timer->callout);
     timer->context = NULL;
     timer->expiration_routine = NULL;
-    timer->linux_timer.function = NULL;
-    timer->linux_timer.data = 0;
     return;
 }
 
 VCOS_INLINE_IMPL
 VCOS_UNSIGNED vcos_process_id_current(void) {
-   return (VCOS_UNSIGNED)current->pid;
+   return (VCOS_UNSIGNED)curthread->td_proc->p_pid;
 }
 
 
+#if 0
+XXXBSD: not yet
 VCOS_INLINE_IMPL
 int vcos_in_interrupt(void) {
    return in_interrupt();
 }
+#endif
 
 /***********************************************************
  *
@@ -419,7 +406,7 @@ int vcos_in_interrupt(void) {
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_atomic_flags_create(VCOS_ATOMIC_FLAGS_T *atomic_flags)
 {
-   atomic_set(atomic_flags, 0);
+   atomic_set_32(atomic_flags, 0);
    return VCOS_SUCCESS;
 }
 
@@ -428,14 +415,14 @@ void vcos_atomic_flags_or(VCOS_ATOMIC_FLAGS_T *atomic_flags, uint32_t flags)
 {
    uint32_t value;
    do {
-      value = atomic_read(atomic_flags);
-   } while (atomic_cmpxchg(atomic_flags, value, value | flags) != value);
+      value = atomic_load_acq_32(atomic_flags);
+   } while (atomic_cmpset_rel_32(atomic_flags, value, value | flags) != value);
 }
 
 VCOS_INLINE_IMPL
 uint32_t vcos_atomic_flags_get_and_clear(VCOS_ATOMIC_FLAGS_T *atomic_flags)
 {
-   return atomic_xchg(atomic_flags, 0);
+   return atomic_readandclear_32(atomic_flags);
 }
 
 VCOS_INLINE_IMPL
