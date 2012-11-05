@@ -21,20 +21,13 @@ VideoCore OS Abstraction Layer - pthreads types
 =============================================================================*/
 
 #define  VCOS_INLINE_BODIES
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/time.h>
-#include <linux/pid.h>
-#include <linux/mm.h>
-#include <linux/version.h>
 
-#if defined( CONFIG_BCM_KNLLOG_SUPPORT )
-#include <linux/broadcom/knllog.h>
-#endif
 #include "interface/vcos/vcos.h"
 #ifdef HAVE_VCOS_VERSION
 #include "interface/vcos/vcos_build_info.h"
 #endif
+
+MALLOC_DEFINE(M_VCOS, "vcos", "VideoCore general purpose memory");
 
 VCOS_CFG_ENTRY_T  vcos_cfg_dir;
 VCOS_CFG_ENTRY_T  vcos_logging_cfg_dir;
@@ -49,25 +42,23 @@ static VCOS_THREAD_ATTR_T default_attrs = {
    VCOS_DEFAULT_STACK_SIZE,
 };
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,36)
-static DEFINE_SEMAPHORE(lock);
-#else
-static DECLARE_MUTEX(lock);
-#endif
+/* XXXBSD: destroy on unload? */
+static struct mtx vcos_mtx;
+MTX_SYSINIT(vcos_mtx, &vcos_mtx, "vcos", MTX_DEF);
 
 typedef void (*LEGACY_ENTRY_FN_T)(int, void *);
 
 /** Wrapper function around the real thread function. Posts the semaphore
   * when completed.
   */
-static int vcos_thread_wrapper(void *arg)
+static void vcos_thread_wrapper(void *arg)
 {
    void *ret;
    VCOS_THREAD_T *thread = arg;
 
    vcos_assert(thread->magic == VCOS_THREAD_MAGIC);
 
-   thread->thread.thread = current;
+   thread->thread.thread = curthread;
 
    vcos_add_thread(thread);
 
@@ -88,12 +79,10 @@ static int vcos_thread_wrapper(void *arg)
 
    thread->exit_data = ret;
 
-   vcos_remove_thread(current);
+   vcos_remove_thread(curthread);
 
    /* For join and cleanup */
    vcos_semaphore_post(&thread->wait);
-
-   return 0;
 }
 
 VCOS_STATUS_T vcos_thread_create(VCOS_THREAD_T *thread,
@@ -103,7 +92,7 @@ VCOS_STATUS_T vcos_thread_create(VCOS_THREAD_T *thread,
                                  void *arg)
 {
    VCOS_STATUS_T st;
-   struct task_struct *kthread;
+   struct thread *kthread;
 
    memset(thread, 0, sizeof(*thread));
    thread->magic     = VCOS_THREAD_MAGIC;
@@ -133,11 +122,15 @@ VCOS_STATUS_T vcos_thread_create(VCOS_THREAD_T *thread,
    /*required for event groups */
    vcos_timer_create(&thread->_timer.timer, thread->name, NULL, NULL);
 
-   kthread = kthread_create((int (*)(void *))vcos_thread_wrapper, (void*)thread, name);
+   kthread = NULL;
+#if 0
+   XXXBSD: implement me
+   kthread_create((void (*)(void *))vcos_thread_wrapper, (void*)thread, NULL, &kthread, 0, 0, "%s", name);
    vcos_assert(kthread != NULL);
    set_user_nice(kthread, attrs->ta_priority);
    thread->thread.thread = kthread;
    wake_up_process(kthread);
+#endif
    return VCOS_SUCCESS;
 }
 
@@ -168,8 +161,7 @@ void vcos_thread_join(VCOS_THREAD_T *thread,
 uint32_t vcos_getmicrosecs( void )
 {
    struct timeval tv;
-/*XXX FIX ME! switch to ktime_get_ts to use MONOTONIC clock */
-   do_gettimeofday(&tv);
+   getmicrouptime(&tv);
    return (tv.tv_sec*1000000) + tv.tv_usec;
 }
 
@@ -182,10 +174,10 @@ static const char *log_prefix[] =
 {
    "",            /* VCOS_LOG_UNINITIALIZED */
    "",            /* VCOS_LOG_NEVER */
-   KERN_ERR,      /* VCOS_LOG_ERROR */
-   KERN_WARNING,  /* VCOS_LOG_WARN */
-   KERN_INFO,     /* VCOS_LOG_INFO */
-   KERN_INFO      /* VCOS_LOG_TRACE */
+   "[E] ",        /* VCOS_LOG_ERROR */
+   "[W] ",        /* VCOS_LOG_WARN */
+   "[I] ",        /* VCOS_LOG_INFO */
+   "[I] "         /* VCOS_LOG_TRACE */
 };
 
 void vcos_vlog_default_impl(const VCOS_LOG_CAT_T *cat, VCOS_LOG_LEVEL_T _level, const char *fmt, va_list args)
@@ -194,7 +186,7 @@ void vcos_vlog_default_impl(const VCOS_LOG_CAT_T *cat, VCOS_LOG_LEVEL_T _level, 
    const char  *prefix;
    const char  *real_fmt;
 
-   preempt_disable();
+   /* XXXBSD: preempt_disable(); */
    {
        if ( *fmt == '<' )
        {
@@ -209,15 +201,15 @@ void vcos_vlog_default_impl(const VCOS_LOG_CAT_T *cat, VCOS_LOG_LEVEL_T _level, 
 #if defined( CONFIG_BCM_KNLLOG_SUPPORT )
        knllog_ventry( "vcos", real_fmt, args );
 #endif
-       printk( "%.3svcos: [%d]: ", prefix, current->pid );
-       vprintk( real_fmt, args );
+       printf( "%.3svcos: [%d]: ", prefix, curthread->td_proc->p_pid );
+       vprintf( real_fmt, args );
 
        if ( newline == NULL )
        {
-          printk("\n");
+          printf("\n");
        }
    }
-   preempt_enable();
+   /* XXXBSD: preempt_enable(); */
 }
 
 
@@ -258,7 +250,7 @@ VCOS_STATUS_T vcos_init(void)
 {
    if ( vcos_cfg_mkdir( &vcos_cfg_dir, NULL, "vcos" ) != VCOS_SUCCESS )
    {
-      printk( KERN_ERR "%s: Unable to create vcos cfg entry\n", __func__ );
+      printf( "%s: Unable to create vcos cfg entry\n", __func__ );
    }
    vcos_logging_init();
 
@@ -266,7 +258,7 @@ VCOS_STATUS_T vcos_init(void)
    if ( vcos_cfg_create_entry( &vcos_version_cfg, &vcos_cfg_dir, "version",
                                show_version, NULL, NULL ) != VCOS_SUCCESS )
    {
-      printk( KERN_ERR "%s: Unable to create vcos cfg entry 'version'\n", __func__ );
+      printf( "%s: Unable to create vcos cfg entry 'version'\n", __func__ );
    }
 #endif
 
@@ -289,12 +281,12 @@ void vcos_deinit(void)
 
 void vcos_global_lock(void)
 {
-   down(&lock);
+   mtx_lock(&vcos_mtx);
 }
 
 void vcos_global_unlock(void)
 {
-   up(&lock);
+   mtx_unlock(&vcos_mtx);
 }
 
 /* vcos_thread_exit() doesn't really stop this thread here
@@ -336,11 +328,8 @@ void _vcos_task_timer_set(void (*pfn)(void *), void *cxt, VCOS_UNSIGNED ms)
 void _vcos_task_timer_cancel(void)
 {
    VCOS_THREAD_T *self = vcos_thread_current();
-   if (self->_timer.timer.linux_timer.function)
-   {
-      vcos_timer_cancel(&self->_timer.timer);
-      vcos_timer_delete(&self->_timer.timer);
-   }
+   vcos_timer_cancel(&self->_timer.timer);
+   vcos_timer_delete(&self->_timer.timer);
 }
 
 int vcos_vsnprintf( char *buf, size_t buflen, const char *fmt, va_list ap )
@@ -380,7 +369,7 @@ void _vcos_log_platform_init(void)
 {
    if ( vcos_cfg_mkdir( &vcos_logging_cfg_dir, &vcos_cfg_dir, "logging" ) != VCOS_SUCCESS )
    {
-      printk( KERN_ERR "%s: Unable to create logging cfg entry\n", __func__ );
+      printf( "%s: Unable to create logging cfg entry\n", __func__ );
    }
 }
 
@@ -415,7 +404,7 @@ static void logging_parse_category( VCOS_CFG_BUF_T buf, void *data )
    }
    else
    {
-      printk( KERN_ERR "%s: Unrecognized logging level: '%s'\n",
+      printf( "%s: Unrecognized logging level: '%s'\n",
               __func__, str );
    }
 }
@@ -435,7 +424,7 @@ void _vcos_log_platform_register(VCOS_LOG_CAT_T *category)
                                logging_show_category, logging_parse_category,
                                category ) != VCOS_SUCCESS )
    {
-      printk( KERN_ERR "%s: Unable to create cfg entry for logging category '%s'\n",
+      printf( "%s: Unable to create cfg entry for logging category '%s'\n",
               __func__, category->name );
       category->platform_data = NULL;
    }
@@ -461,7 +450,7 @@ void _vcos_log_platform_unregister(VCOS_LOG_CAT_T *category)
    {
       if ( vcos_cfg_remove_entry( &entry ) != VCOS_SUCCESS )
       {
-         printk( KERN_ERR "%s: Unable to remove cfg entry for logging category '%s'\n",
+         printf( "%s: Unable to remove cfg entry for logging category '%s'\n",
                  __func__, category->name );
       }
    }
@@ -481,12 +470,12 @@ void *vcos_platform_malloc( VCOS_UNSIGNED required_size )
        * returns pages
        */
 
-      return vmalloc( required_size );
+     /* XXXBSD: optimize it? */
    }
 
    /* For smaller allocation, use kmalloc */
 
-   return kmalloc( required_size, GFP_KERNEL );
+   return malloc( required_size, M_VCOS, M_ZERO );
 }
 
 /*****************************************************************************
@@ -497,15 +486,7 @@ void *vcos_platform_malloc( VCOS_UNSIGNED required_size )
 
 void  vcos_platform_free( void *ptr )
 {
-   if (((unsigned long)ptr >= VMALLOC_START )
-   &&  ((unsigned long)ptr < VMALLOC_END ))
-   {
-      vfree( ptr );
-   }
-   else
-   {
-      kfree( ptr );
-   }
+   free( ptr, M_VCOS );
 }
 
 /*****************************************************************************
@@ -545,83 +526,5 @@ VCOS_STATUS_T vcos_once(VCOS_ONCE_T *once_control,
 
 char *vcos_strdup(const char *str)
 {
-    return kstrdup(str, GFP_KERNEL);
+    return strdup(str, M_VCOS);
 }
-
-
-/* Export functions for modules to use */
-EXPORT_SYMBOL( vcos_init );
-
-EXPORT_SYMBOL( vcos_semaphore_trywait );
-EXPORT_SYMBOL( vcos_semaphore_post );
-EXPORT_SYMBOL( vcos_semaphore_create );
-EXPORT_SYMBOL( vcos_semaphore_wait );
-EXPORT_SYMBOL( vcos_semaphore_delete );
-
-EXPORT_SYMBOL( vcos_log_impl );
-EXPORT_SYMBOL( vcos_vlog_impl );
-EXPORT_SYMBOL( vcos_vlog_default_impl );
-EXPORT_SYMBOL( vcos_log_get_default_category );
-EXPORT_SYMBOL( vcos_log_register );
-EXPORT_SYMBOL( vcos_log_unregister );
-EXPORT_SYMBOL( vcos_logging_init );
-EXPORT_SYMBOL( vcos_log_level_to_string );
-EXPORT_SYMBOL( vcos_string_to_log_level );
-EXPORT_SYMBOL( vcos_log_dump_mem_impl );
-
-EXPORT_SYMBOL( vcos_event_create );
-EXPORT_SYMBOL( vcos_event_delete );
-EXPORT_SYMBOL( vcos_event_flags_set );
-EXPORT_SYMBOL( vcos_event_signal );
-EXPORT_SYMBOL( vcos_event_wait );
-EXPORT_SYMBOL( vcos_event_try );
-
-EXPORT_SYMBOL( vcos_getmicrosecs );
-
-EXPORT_SYMBOL( vcos_strcasecmp );
-EXPORT_SYMBOL( vcos_snprintf );
-EXPORT_SYMBOL( vcos_vsnprintf );
-
-EXPORT_SYMBOL( vcos_thread_current );
-EXPORT_SYMBOL( vcos_thread_join );
-EXPORT_SYMBOL( vcos_thread_create );
-EXPORT_SYMBOL( vcos_thread_set_priority );
-EXPORT_SYMBOL( vcos_thread_exit );
-EXPORT_SYMBOL( vcos_once );
-
-EXPORT_SYMBOL( vcos_thread_attr_init );
-EXPORT_SYMBOL( vcos_thread_attr_setpriority );
-EXPORT_SYMBOL( vcos_thread_attr_settimeslice );
-EXPORT_SYMBOL( vcos_thread_attr_setstacksize );
-EXPORT_SYMBOL( _vcos_thread_attr_setlegacyapi );
-
-EXPORT_SYMBOL( vcos_event_flags_create );
-EXPORT_SYMBOL( vcos_event_flags_delete );
-EXPORT_SYMBOL( vcos_event_flags_get );
-
-EXPORT_SYMBOL( vcos_sleep );
-
-EXPORT_SYMBOL( vcos_calloc );
-EXPORT_SYMBOL( vcos_malloc );
-EXPORT_SYMBOL( vcos_malloc_aligned );
-EXPORT_SYMBOL( vcos_free );
-
-EXPORT_SYMBOL( vcos_mutex_create );
-EXPORT_SYMBOL( vcos_mutex_delete );
-EXPORT_SYMBOL( vcos_mutex_lock );
-EXPORT_SYMBOL( vcos_mutex_unlock );
-EXPORT_SYMBOL( vcos_mutex_trylock );
-
-EXPORT_SYMBOL( vcos_timer_cancel );
-EXPORT_SYMBOL( vcos_timer_create );
-EXPORT_SYMBOL( vcos_timer_delete );
-EXPORT_SYMBOL( vcos_timer_set );
-
-EXPORT_SYMBOL( vcos_atomic_flags_create );
-EXPORT_SYMBOL( vcos_atomic_flags_delete );
-EXPORT_SYMBOL( vcos_atomic_flags_or );
-EXPORT_SYMBOL( vcos_atomic_flags_get_and_clear );
-
-EXPORT_SYMBOL( vcos_verify_bkpts_enabled );
-
-EXPORT_SYMBOL( vcos_strdup );

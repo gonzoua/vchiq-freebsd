@@ -16,59 +16,41 @@
   * threads that were not created by VCOS.
   */
 
-#include <linux/semaphore.h>
-#include <linux/vmalloc.h>
-#include <linux/list.h>
-#include <linux/sched.h>
-
 #include "vcos_thread_map.h"
 #include "interface/vcos/vcos_logging.h"
 
-/*
- * Store the vcos_thread pointer at the end of
- * current kthread stack, right after the thread_info
- * structure.
- *
- * I belive we should be safe here to steal these 4 bytes
- * from the stack, as long as the vcos thread does not use up
- * all the stack available
- *
- * NOTE: This scheme will not work on architectures with stack growing up
- */
+/* XXXBSD: Naive implementation, should be replaced with rpoper one */ 
+#define MAX_MAP_SIZE 256
+struct map_entry {
+   struct thread     *kernel_thread;
+   VCOS_THREAD_T     *vcos_thread;
+};
 
-/* Shout, if we are not being compiled for ARM kernel */
-
-#ifndef CONFIG_ARM
-#error " **** The vcos kthread implementation may not work for non-ARM kernel ****"
-#endif
-
-static inline void *to_current_vcos_thread(void)
-{
-   unsigned long *vcos_data;
-
-   vcos_data = (unsigned long *)((char *)current_thread_info() + sizeof(struct thread_info));
-
-   return (void *)vcos_data;
-}
-
-
-static inline void *to_vcos_thread(struct task_struct *tsk)
-{
-   unsigned long *vcos_data;
-
-   vcos_data = (unsigned long *)((char *)tsk->stack + sizeof(struct thread_info));
-
-   return (void *)vcos_data;
-}
+struct map_entry thread_map[MAX_MAP_SIZE];
+static int map_entries;
 
 /**
    @fn uint32_t vcos_add_thread(THREAD_MAP_T *vcos_thread);
 */
 uint32_t vcos_add_thread(VCOS_THREAD_T *vcos_thread)
 {
-   VCOS_THREAD_T **vcos_thread_storage = (VCOS_THREAD_T **)to_current_vcos_thread();
+   struct thread *td = curthread;
+   int i;
 
-   *vcos_thread_storage = vcos_thread;
+   for (i = 0; i < map_entries; i++) {
+      if (thread_map[i].kernel_thread == curthread) {
+         thread_map[i].vcos_thread = vcos_thread;
+         return(0);
+      }
+   }
+
+   if (map_entries == MAX_MAP_SIZE) {
+      printf("%s: map_entries reached maximu\n", __func__);
+   }
+
+   thread_map[map_entries].kernel_thread = td;
+   thread_map[map_entries].vcos_thread = vcos_thread;
+   map_entries++;
 
    return(0);
 }
@@ -77,53 +59,38 @@ uint32_t vcos_add_thread(VCOS_THREAD_T *vcos_thread)
 /**
    @fn uint32_t vcos_remove_thread(struct task_struct * thread_id);
 */
-uint32_t vcos_remove_thread(struct task_struct *thread_id)
+uint32_t vcos_remove_thread(struct thread *td)
 {
    /* Remove thread_id -> VCOS_THREAD_T relationship */
-   VCOS_THREAD_T **vcos_thread_storage;
+   int i,j;
 
-   /*
-    * We want to be able to build vcos as a loadable module, which
-    * means that we can't call get_task_struct. So we assert if we're
-    * ever called with thread_id != current.
-    */
+   if( td != curthread )
+      panic("vcos_remove_thread: thread_id != current");
 
-   BUG_ON( thread_id != current );
-
-   vcos_thread_storage = (VCOS_THREAD_T **)to_vcos_thread(thread_id);
-
-   *(unsigned long *)vcos_thread_storage = 0xCAFEBABE;
+   for (i = 0; i < map_entries; i++) {
+      if (thread_map[i].kernel_thread == td) {
+         for (j = i; j < map_entries - 1; j++) {
+            thread_map[j].kernel_thread = thread_map[j+1].kernel_thread;
+            thread_map[j].vcos_thread = thread_map[j+1].vcos_thread;
+         }
+         thread_map[map_entries - 1].kernel_thread = NULL;
+         thread_map[map_entries - 1].vcos_thread = NULL;
+         map_entries--;
+         break;
+      }
+   }
 
    return(0);
 }
 
-
 VCOS_THREAD_T *vcos_kthread_current(void)
 {
-   VCOS_THREAD_T **vcos_thread_storage = (VCOS_THREAD_T **)to_current_vcos_thread();
+   int i;
 
-   /* If we find this, either the thread is already dead or stack pages of a
-    * dead vcos thread are re-allocated to this one.
-    *
-    * Since there's no way to differentiate between these 2 cases, we just dump
-    * the current task name to the log.
-    *
-    * If the current thread is created using VCOS API, you should *never* see this
-    * print.
-    * 
-    * If its a non-VCOS thread, just let it go ...
-    *
-    * To debug VCOS, uncomment printk's under the "if" condition below
-    *
-    */
-   if (*vcos_thread_storage == (void *)0xCAFEBABE)
-   {
-     #if 0
-      printk(KERN_DEBUG"****************************************************\n");
-      printk(KERN_DEBUG"%s : You have a problem, if \"%s\" is a VCOS thread\n",__func__, current->comm);
-      printk(KERN_DEBUG"****************************************************\n");
-     #endif
+   for (i = 0; i < map_entries; i++) {
+      if (thread_map[i].kernel_thread == curthread)
+         return thread_map[i].vcos_thread;
    }
 
-   return *vcos_thread_storage;
+   return (void *)NULL;
 }
