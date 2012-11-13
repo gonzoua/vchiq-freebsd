@@ -209,7 +209,7 @@ typedef struct vchiq_slot_info_struct {
    /* Use two counters rather than one to avoid the need for a mutex. */
    volatile short use_count;
    volatile short release_count;
-} VCHIQ_SLOT_INFO_T;
+} __packed VCHIQ_SLOT_INFO_T;
 
 typedef struct vchiq_service_struct {
    VCHIQ_SERVICE_BASE_T base;
@@ -295,7 +295,7 @@ typedef struct vchiq_shared_state_struct {
 
    /* Debugging state */
    volatile int debug[DEBUG_MAX];
-} VCHIQ_SHARED_STATE_T;
+} __packed VCHIQ_SHARED_STATE_T;
 
 typedef struct vchiq_slot_zero_struct {
    int magic;
@@ -309,7 +309,7 @@ typedef struct vchiq_slot_zero_struct {
    VCHIQ_SHARED_STATE_T master;
    VCHIQ_SHARED_STATE_T slave;
    VCHIQ_SLOT_INFO_T slots[VCHIQ_MAX_SLOTS];
-} VCHIQ_SLOT_ZERO_T;
+} __packed VCHIQ_SLOT_ZERO_T;
 
 struct vchiq_state_struct {
    int id;
