@@ -475,7 +475,7 @@ void *vcos_platform_malloc( VCOS_UNSIGNED required_size )
 
    /* For smaller allocation, use kmalloc */
 
-   return malloc( required_size, M_VCOS, M_ZERO );
+   return malloc( required_size, M_VCOS, M_WAITOK | M_ZERO );
 }
 
 /*****************************************************************************
