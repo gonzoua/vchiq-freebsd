@@ -112,7 +112,7 @@ vchiq_platform_init(VCHIQ_STATE_T *state)
 
 	err = bus_dmamap_load(dma_tag, dma_map, g_slot_mem,
 	    g_slot_mem_size + frag_mem_size, vchiq_dmamap_cb,
-	    &g_slot_phys, BUS_DMA_NOWAIT);
+	    &g_slot_phys, BUS_DMA_NOWAIT | BUS_DMA_COHERENT);
 
 	if (err) {
 		vcos_log_error("cannot load DMA map\n");
@@ -149,22 +149,6 @@ vchiq_platform_init(VCHIQ_STATE_T *state)
 		goto failed_vchiq_init;
 	}
 
-#ifdef notyet
-	err = request_irq(VCHIQ_DOORBELL_IRQ, vchiq_doorbell_irq,
-		IRQF_SAMPLE_RANDOM | IRQF_IRQPOLL, "VCHIQ doorbell",
-		state);
-	if (err < 0)
-	{
-		printk( KERN_ERR "%s: failed to register irq=%d err=%d\n", __func__,
-			VCHIQ_DOORBELL_IRQ, err );
-		goto failed_request_irq;
-	}
-
-	/* Send the base address of the slots to VideoCore */
-
-	__asm __volatile("dsb");
-#endif
-
 	bcm_mbox_write(BCM2835_MBOX_CHAN_VCHIQ, (unsigned int)g_slot_phys);
 
 	vcos_log_info("vchiq_init - done (slots %x, phys %x)",
@@ -187,31 +171,10 @@ failed_alloc:
 void 
 vchiq_platform_exit(VCHIQ_STATE_T *state)
 {
-#ifdef notyet
-	free_irq(VCHIQ_DOORBELL_IRQ, state);
-#endif
 
 	bus_dmamap_unload(dma_tag, dma_map);
 	bus_dmamap_destroy(dma_tag, dma_map);
 	bus_dma_tag_destroy(dma_tag);
-}
-
-void
-remote_event_signal(REMOTE_EVENT_T *event)
-{
-	event->fired = 1;
-
-	/* The test on the next line also ensures the write on the previous line
-		has completed */
-
-	if (event->armed) {
-#ifdef notyet
-		/* trigger vc interrupt */
-		__asm __volatile("dsb");
-
-		writel(0, __io_address(ARM_0_BELL2));
-#endif
-	}
 }
 
 int
@@ -347,23 +310,6 @@ vchiq_platform_get_arm_state(VCHIQ_STATE_T *state)
 /*
  * Local functions
  */
-
-static void
-vchiq_doorbell_irq(int irq, void *dev_id)
-{
-	VCHIQ_STATE_T *state = dev_id;
-	unsigned int status;
-
-	/* Read (and clear) the doorbell */
-#ifdef notyet
-	status = readl(__io_address(ARM_0_BELL0));
-#endif
-
-	if (status & 0x4) {  /* Was the doorbell rung? */
-		remote_event_pollall(state);
-	}
-
-}
 
 #ifdef notyet
 /* There is a potential problem with partial cache lines (pages?)
