@@ -22,7 +22,9 @@
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
 #endif
+#ifndef __FreeBSD__
 #define CACHE_LINE_SIZE 32
+#endif
 #define PAGELIST_WRITE 0
 #define PAGELIST_READ 1
 #define PAGELIST_READ_WITH_FRAGMENTS 2

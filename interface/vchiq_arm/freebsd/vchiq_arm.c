@@ -16,22 +16,21 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/types.h>
-#include <linux/errno.h>
-#include <linux/cdev.h>
-#include <linux/fs.h>
-#include <linux/device.h>
-#include <linux/mm.h>
-#include <linux/highmem.h>
-#include <linux/pagemap.h>
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/types.h>
+#include <sys/conf.h>
 
 #include "vchiq_core.h"
 #include "vchiq_ioctl.h"
 #include "vchiq_arm.h"
 
 #define DEVICE_NAME "vchiq"
+
+/* BSD compatibility */
+#define copy_from_user(to, from, n) (bcopy((from), (to), (n)), 0)
+#define copy_to_user(to, from, n)   (bcopy((from), (to), (n)), 0)
+#define __user 
 
 /* Override the default prefix, which would be vchiq_arm (from the filename) */
 #undef MODULE_PARAM_PREFIX
@@ -89,15 +88,15 @@ struct vchiq_instance_struct {
 
 typedef struct dump_context_struct
 {
-   char __user *buf;
+   char *buf;
    size_t actual;
    size_t space;
-   loff_t offset;
+   off_t offset;
 } DUMP_CONTEXT_T;
 
 VCOS_LOG_CAT_T vchiq_arm_log_category;
 
-static struct cdev    vchiq_cdev;
+static struct cdev    *vchiq_cdev;
 static dev_t          vchiq_devid;
 static VCHIQ_STATE_T g_state;
 static struct class  *vchiq_class;
@@ -127,8 +126,19 @@ vcos_static_assert(vcos_countof(ioctl_names) == (VCHIQ_IOC_MAX + 1));
 
 VCOS_LOG_LEVEL_T vchiq_default_arm_log_level = VCOS_LOG_ERROR;
 
+static eventhandler_tag vchiq_ehtag = NULL;
+// static d_ioctl_t	vchiq_ioctl;
+
+static struct cdevsw vchiq_cdevsw = {
+	.d_version	= D_VERSION,
+	// .d_ioctl	= vchiq_ioctl,
+	.d_name		= DEVICE_NAME,
+};
+
+#if 0
 static void
 dump_phys_mem( void *virt_addr, uint32_t num_bytes );
+#endif
 
 /****************************************************************************
 *
@@ -330,8 +340,10 @@ service_callback(VCHIQ_REASON_T reason, VCHIQ_HEADER_T *header,
 *
 ***************************************************************************/
 
-static long
-vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+#if 0
+static int
+vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
+   struct thread *td)
 {
    VCHIQ_INSTANCE_T instance = file->private_data;
    VCHIQ_STATUS_T status = VCHIQ_SUCCESS;
@@ -370,13 +382,13 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
    case VCHIQ_IOC_CONNECT:
       if (instance->connected) {
-         ret = -EINVAL;
+         ret = EINVAL;
          break;
       }
       if ((rc=vcos_mutex_lock(&instance->state->mutex)) != VCOS_SUCCESS) {
          vcos_log_error("vchiq: connect: could not lock mutex for state %d: %d",
                         instance->state->id, rc);
-         ret = -EINTR;
+         ret = EINTR;
          break;
       }
       status = vchiq_connect_internal(instance->state, instance);
@@ -399,7 +411,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
 
@@ -411,7 +423,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          }
 
          if (!user_service) {
-            ret = -EMFILE;
+            ret = EMFILE;
             break;
          }
 
@@ -419,7 +431,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (instance->connected)
                srvstate = VCHIQ_SRVSTATE_OPENING;
             else {
-               ret = -ENOTCONN;
+               ret = ENOTCONN;
                break;
             }
          } else {
@@ -463,8 +475,8 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                       (&service->base);
                   ret =
                       (status ==
-                       VCHIQ_RETRY) ? -EINTR :
-                      -EIO;
+                       VCHIQ_RETRY) ? EINTR :
+                      EIO;
                   user_service->service = NULL;
                   user_service->instance = NULL;
                   vcos_event_delete(&user_service->insert_event);
@@ -480,9 +492,9 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                    handle,
                    sizeof(user_service->
                      handle)) != 0)
-               ret = -EFAULT;
+               ret = EFAULT;
          } else {
-            ret = -EEXIST;
+            ret = EEXIST;
          }
       }
       break;
@@ -506,7 +518,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                user_service->service = NULL;
             }
          } else
-            ret = -EINVAL;
+            ret = EINVAL;
       }
       break;
 
@@ -527,7 +539,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                user_service->service = NULL;
             }
          } else
-            ret = -EINVAL;
+            ret = EINVAL;
       }
       break;
 
@@ -543,7 +555,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             status = (cmd == VCHIQ_IOC_USE_SERVICE) ? vchiq_use_service(&user_service->service->base) : vchiq_release_service(&user_service->service->base);
             if (status != VCHIQ_SUCCESS)
             {
-               ret = -EINVAL; /* ??? */
+               ret = EINVAL; /* ??? */
             }
          }
       }
@@ -557,7 +569,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
          user_service = find_service_by_handle(instance, args.handle);
@@ -573,9 +585,9 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                   (&user_service->service->base,
                    elements, args.count);
             else
-               ret = -EFAULT;
+               ret = EFAULT;
          } else {
-            ret = -EINVAL;
+            ret = EINVAL;
          }
       }
       break;
@@ -592,7 +604,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
          user_service = find_service_by_handle(instance, args.handle);
@@ -606,7 +618,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                 args.userdata, args.mode,
                 dir);
          } else {
-            ret = -EINVAL;
+            ret = EINVAL;
          }
       }
       break;
@@ -617,14 +629,14 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
          DEBUG_TRACE(AWAIT_COMPLETION_LINE);
          if (!instance->connected) {
-            ret = -ENOTCONN;
+            ret = ENOTCONN;
             break;
          }
 
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
          DEBUG_TRACE(AWAIT_COMPLETION_LINE);
@@ -637,7 +649,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                DEBUG_TRACE(AWAIT_COMPLETION_LINE);
                vcos_log_info
                    ("AWAIT_COMPLETION interrupted");
-               ret = -EINTR;
+               ret = EINTR;
                break;
             }
          }
@@ -679,7 +691,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                         (unsigned int)header, args.msgbufsize, msglen);
                      vcos_assert(0);
                      if (ret == 0)
-                        ret = -EMSGSIZE;
+                        ret = EMSGSIZE;
                      break;
                   }
                   if (msgbufcount <= 0)
@@ -694,7 +706,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                      sizeof(msgbuf)) != 0)
                   {
                      if (ret == 0)
-                        ret = -EFAULT;
+                        ret = EFAULT;
                      break;
                   }
 
@@ -702,7 +714,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                   if (copy_to_user(msgbuf, header, msglen) != 0)
                   {
                      if (ret == 0)
-                        ret = -EFAULT;
+                        ret = EFAULT;
                      break;
                   }
 
@@ -722,7 +734,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                     sizeof(VCHIQ_COMPLETION_DATA_T)) !=
                    0) {
                   if (ret == 0)
-                     ret = -EFAULT;
+                     ret = EFAULT;
                   break;
                }
                instance->completion_remove++;
@@ -734,7 +746,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                   &((VCHIQ_AWAIT_COMPLETION_T *)arg)->msgbufcount,
                   &msgbufcount, sizeof(msgbufcount)) != 0)
                {
-                  ret = -EFAULT;
+                  ret = EFAULT;
                   break;
                }
             }
@@ -756,14 +768,14 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
          user_service = &instance->services[args.handle];
          if ((args.handle < 0) || (args.handle >= MAX_SERVICES) ||
             (user_service->service == NULL) ||
             (user_service->is_vchi == 0)) {
-            ret = -EINVAL;
+            ret = EINVAL;
             break;
          }
          if (user_service->msg_remove == user_service->msg_insert)
@@ -771,7 +783,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (!args.blocking)
             {
                DEBUG_TRACE(DEQUEUE_MESSAGE_LINE);
-               ret = -EWOULDBLOCK;
+               ret = EWOULDBLOCK;
                break;
             }
             user_service->dequeue_pending = 1;
@@ -780,7 +792,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                if (vcos_event_wait(&user_service->insert_event) !=
                    VCOS_SUCCESS) {
                   vcos_log_info("DEQUEUE_MESSAGE interrupted");
-                  ret = -EINTR;
+                  ret = EINTR;
                   break;
                }
             }
@@ -794,7 +806,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          header = user_service->msg_queue[user_service->msg_remove &
             (MSG_QUEUE_SIZE - 1)];
          if (header == NULL)
-            ret = -ENOTCONN;
+            ret = ENOTCONN;
          else if (header->size <= args.bufsize)
          {
             /* Copy to user space if msgbuf is not NULL */
@@ -809,14 +821,14 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                vcos_event_signal(&user_service->remove_event);
             }
             else
-               ret = -EFAULT;
+               ret = EFAULT;
          }
          else
          {
             vcos_log_error("header %x: bufsize %x < size %x",
                (unsigned int)header, args.bufsize, header->size);
             vcos_assert(0);
-            ret = -EMSGSIZE;
+            ret = EMSGSIZE;
          }
          DEBUG_TRACE(DEQUEUE_MESSAGE_LINE);
       }
@@ -843,12 +855,12 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
          if (args.config_size > sizeof(config))
          {
-            ret = -EINVAL;
+            ret = EINVAL;
             break;
          }
          status = vchiq_get_config(instance, args.config_size, &config);
@@ -857,7 +869,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (copy_to_user((void __user *)args.pconfig,
                    &config, args.config_size) != 0)
             {
-               ret = -EFAULT;
+               ret = EFAULT;
                break;
             }
          }
@@ -873,7 +885,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             &args, (const void __user *)arg,
             sizeof(args)) != 0)
          {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
 
@@ -886,7 +898,7 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          }
          else
          {
-            ret = -EINVAL;
+            ret = EINVAL;
          }
       }
       break;
@@ -898,27 +910,30 @@ vchiq_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
          if (copy_from_user
              (&args, (const void __user *)arg,
               sizeof(args)) != 0) {
-            ret = -EFAULT;
+            ret = EFAULT;
             break;
          }
+         printf("IMPLEMENT ME: %s:%d\n", __FILE__, __LINE__);
+#if 0
          dump_phys_mem( args.virt_addr, args.num_bytes );
+#endif
       }
       break;
 
 
    default:
-      ret = -ENOTTY;
+      ret = ENOTTY;
       break;
    }
 
    if (ret == 0) {
       if (status == VCHIQ_ERROR)
-         ret = -EIO;
+         ret = EIO;
       else if (status == VCHIQ_RETRY)
-         ret = -EINTR;
+         ret = EINTR;
    }
 
-   if ((ret < 0) && (ret != -EINTR) && (ret != -EWOULDBLOCK))
+   if ((ret < 0) && (ret != EINTR) && (ret != EWOULDBLOCK))
       vcos_log_warn("  ioctl instance %lx, cmd %s -> status %d, %ld",
          (unsigned long)instance,
          (_IOC_NR(cmd) <= VCHIQ_IOC_MAX) ? ioctl_names[_IOC_NR(cmd)] :
@@ -952,12 +967,12 @@ vchiq_open(struct inode *inode, struct file *file)
          if (!state)
          {
             vcos_log_error( "vchiq has no connection to VideoCore");
-            return -ENOTCONN;
+            return ENOTCONN;
          }
 
          instance = kzalloc(sizeof(*instance), GFP_KERNEL);
          if (!instance)
-            return -ENOMEM;
+            return ENOMEM;
 
          instance->state = state;
          instance->pid = current->tgid;
@@ -970,7 +985,7 @@ vchiq_open(struct inode *inode, struct file *file)
 
    default:
       vcos_log_error("Unknown minor device: %d", dev);
-      return -ENXIO;
+      return ENXIO;
    }
 
    return 0;
@@ -1049,11 +1064,12 @@ vchiq_release(struct inode *inode, struct file *file)
 
    default:
       vcos_log_error("Unknown minor device: %d", dev);
-      ret = -ENXIO;
+      ret = ENXIO;
    }
 
    return ret;
 }
+#endif
 
 /****************************************************************************
 *
@@ -1082,7 +1098,7 @@ vchiq_dump(void *dump_context, const char *str, int len)
       if (copy_bytes == 0)
          return;
       if (copy_to_user(context->buf + context->actual, str, copy_bytes))
-         context->actual = -EFAULT;
+         context->actual = EFAULT;
       context->actual += copy_bytes;
       len -= copy_bytes;
 
@@ -1094,7 +1110,7 @@ vchiq_dump(void *dump_context, const char *str, int len)
          char cr = '\n';
          if (copy_to_user(context->buf + context->actual - 1, &cr, 1))
          {
-            context->actual = -EFAULT;
+            context->actual = EFAULT;
          }
       }
    }
@@ -1191,6 +1207,7 @@ vchiq_dump_platform_service_state(void *dump_context, VCHIQ_SERVICE_T *service)
 *
 ***************************************************************************/
 
+#if 0
 static void
 dump_phys_mem( void *virt_addr, uint32_t num_bytes )
 {
@@ -1217,7 +1234,7 @@ dump_phys_mem( void *virt_addr, uint32_t num_bytes )
 
    if (( pages = kmalloc( sizeof( struct page *) * num_pages, GFP_KERNEL )) == NULL )
    {
-      printk( KERN_ERR "Unable to allocation memory for %d pages\n", num_pages );
+      printf( "[E] Unable to allocation memory for %d pages\n", num_pages );
       return;
    }
 
@@ -1266,6 +1283,7 @@ dump_phys_mem( void *virt_addr, uint32_t num_bytes )
    }
    kfree( pages );
 }
+#endif
 
 /****************************************************************************
 *
@@ -1275,7 +1293,7 @@ dump_phys_mem( void *virt_addr, uint32_t num_bytes )
 
 static ssize_t
 vchiq_read(struct file * file, char __user * buf,
-   size_t count, loff_t *ppos)
+   size_t count, off_t *ppos)
 {
    DUMP_CONTEXT_T context;
    context.buf = buf;
@@ -1297,28 +1315,19 @@ vchiq_get_state(void)
 
    if (g_state.remote == NULL)
    {
-      printk( "%s: g_state.remote == NULL\n", __func__ );
+      printf( "%s: g_state.remote == NULL\n", __func__ );
    }
    else
    {
       if ( g_state.remote->initialised != 1)
       {
-         printk( "%s: g_state.remote->initialised != 1 (%d)\n", __func__, g_state.remote->initialised );
+         printf( "%s: g_state.remote->initialised != 1 (%d)\n", __func__, g_state.remote->initialised );
       }
    }
 
    return ((g_state.remote != NULL) &&
       (g_state.remote->initialised == 1)) ? &g_state : NULL;
 }
-
-static const struct file_operations
-vchiq_fops = {
-   .owner = THIS_MODULE,
-   .unlocked_ioctl = vchiq_ioctl,
-   .open = vchiq_open,
-   .release = vchiq_release,
-   .read = vchiq_read
-};
 
 /*
  * Autosuspend related functionality
@@ -1392,7 +1401,7 @@ hp_func(void *v)
          vcos_log_info( "%s sending VCHIQ_MSG_REMOTE_USE_ACTIVE", __func__);
          if ( vchiq_send_remote_use_active(state) != VCHIQ_SUCCESS)
          {
-            BUG();  /* vc should be resumed, so shouldn't be a problem sending message */
+            panic("BUG()");  /* vc should be resumed, so shouldn't be a problem sending message */
          }
       }
    }
@@ -1818,6 +1827,19 @@ void vchiq_platform_conn_state_changed(VCHIQ_STATE_T *state, VCHIQ_CONNSTATE_T o
    vcos_unused(oldstate);
 }
 
+static void
+vchiq_clone(void *arg, struct ucred *cred,
+    char *name, int namelen, struct cdev **dev)
+{
+   struct snddev_info *d;
+
+   if (*dev != NULL)
+      return;
+   printf("----> %s\n", name);
+   // if (strcmp(name, "vchiq") == 0) {
+   // }
+}
+
 
 /****************************************************************************
 *
@@ -1825,7 +1847,7 @@ void vchiq_platform_conn_state_changed(VCHIQ_STATE_T *state, VCHIQ_CONNSTATE_T o
 *
 ***************************************************************************/
 
-static int __init
+int
 vchiq_init(void)
 {
    int err;
@@ -1838,6 +1860,19 @@ vchiq_init(void)
    vcos_log_set_level(VCOS_LOG_CATEGORY, vchiq_default_arm_log_level);
    vcos_log_register("vchiq_arm", VCOS_LOG_CATEGORY);
 
+   if (vchiq_ehtag == NULL)
+      vchiq_ehtag = EVENTHANDLER_REGISTER(dev_clone, vchiq_clone, 0, 1000);
+
+#if 0
+   vchiq_cdev = make_dev(&vchiq_cdevsw, 0,
+      UID_ROOT, GID_WHEEL, 0600, "vchiq");
+   if (!vchiq_cdev) {
+      printf("Failed to create /dev/vchiq");
+      return (ENXIO);
+   }
+#endif
+
+#if 0
    if ((err =
         alloc_chrdev_region(&vchiq_devid, VCHIQ_MINOR, 1,
              DEVICE_NAME)) != 0) {
@@ -1860,7 +1895,7 @@ vchiq_init(void)
       vchiq_devid, NULL, "vchiq");
    if (IS_ERR(ptr_err = vchiq_dev))
       goto failed_device_create;
-
+#endif
    err = vchiq_platform_init(&g_state);
    if (err != 0)
       goto failed_platform_init;
@@ -1869,24 +1904,20 @@ vchiq_init(void)
    vcos_timer_create( &g_suspend_timer, "suspend_timer", suspend_timer_callback, (void*)(&g_state));
 #endif
 
-   vcos_log_error("vchiq: initialised - version %d (min %d), device %d.%d",
-      VCHIQ_VERSION, VCHIQ_VERSION_MIN,
-      MAJOR(vchiq_devid), MINOR(vchiq_devid));
+   vcos_log_error("vchiq: initialised - version %d (min %d)\n", 
+      VCHIQ_VERSION, VCHIQ_VERSION_MIN);
 
    return 0;
 
 failed_platform_init:
-   device_destroy(vchiq_class, vchiq_devid);
-failed_device_create:
-   class_destroy(vchiq_class);
-failed_class_create:
-   cdev_del(&vchiq_cdev);
-   err = PTR_ERR(ptr_err);
-failed_cdev_add:
-   unregister_chrdev_region(vchiq_devid, 1);
-failed_alloc_chrdev:
+#if 0
+   if (vchiq_cdev) {
+      destroy_dev(vchiq_cdev);
+      vchiq_cdev = NULL;
+   }
+#endif
 failed_platform_vcos_init:
-   printk(KERN_WARNING "could not load vchiq\n");
+   printf("[W] could not load vchiq\n");
    return err;
 }
 /****************************************************************************
@@ -1895,18 +1926,19 @@ failed_platform_vcos_init:
 *
 ***************************************************************************/
 
-static void __exit
+void
 vchiq_exit(void)
 {
+   if (vchiq_ehtag == NULL)
+      EVENTHANDLER_DEREGISTER(dev_clone, vchiq_ehtag);
+   vchiq_ehtag = NULL;
+
    vchiq_platform_exit(&g_state);
-   device_destroy(vchiq_class, vchiq_devid);
-   class_destroy(vchiq_class);
-   cdev_del(&vchiq_cdev);
-   unregister_chrdev_region(vchiq_devid, 1);
+#if 0
+   if (vchiq_cdev) {
+      destroy_dev(vchiq_cdev);
+      vchiq_cdev = NULL;
+   }
+#endif
    vcos_log_unregister(VCOS_LOG_CATEGORY);
 }
-
-module_init(vchiq_init);
-module_exit(vchiq_exit);
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Broadcom Corporation");

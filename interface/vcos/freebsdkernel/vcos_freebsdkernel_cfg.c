@@ -44,7 +44,7 @@ VCOS_STATUS_T vcos_cfg_mkdir( VCOS_CFG_ENTRY_T *entryp,
 {
     VCOS_CFG_ENTRY_T    entry;
 
-    if (( entry = malloc( sizeof( *entry ), M_VCCFG, M_ZERO )) == NULL )
+    if (( entry = malloc( sizeof( *entry ), M_VCCFG, M_WAITOK | M_ZERO )) == NULL )
     {
         return VCOS_ENOMEM;
     }
@@ -77,7 +77,7 @@ VCOS_STATUS_T vcos_cfg_create_entry( VCOS_CFG_ENTRY_T *entryp,
 
     printf("IMPLEMENT ME: vcos_cfg_create_entry %s\n", entryName);
 
-    if (( entry = malloc( sizeof( *entry ), M_VCCFG, M_ZERO )) == NULL )
+    if (( entry = malloc( sizeof( *entry ), M_VCCFG, M_WAITOK | M_ZERO )) == NULL )
     {
         return VCOS_ENOMEM;
     }
