@@ -54,6 +54,7 @@ static VCOS_TIMER_T      g_suspend_timer;
 static void suspend_timer_callback(void *context);
 #endif
 
+MALLOC_DEFINE(M_VCHIQ, "vchiq_cdev", "VideoCore cdev memroy");
 
 typedef struct client_service_struct {
    VCHIQ_SERVICE_T *service;
@@ -124,14 +125,18 @@ static const char *ioctl_names[] =
 
 vcos_static_assert(vcos_countof(ioctl_names) == (VCHIQ_IOC_MAX + 1));
 
-VCOS_LOG_LEVEL_T vchiq_default_arm_log_level = VCOS_LOG_ERROR;
+VCOS_LOG_LEVEL_T vchiq_default_arm_log_level = VCOS_LOG_TRACE;
 
 static eventhandler_tag vchiq_ehtag = NULL;
-// static d_ioctl_t	vchiq_ioctl;
+static d_open_t		vchiq_open;
+static d_close_t	vchiq_close;
+static d_ioctl_t	vchiq_ioctl;
 
 static struct cdevsw vchiq_cdevsw = {
 	.d_version	= D_VERSION,
-	// .d_ioctl	= vchiq_ioctl,
+	.d_ioctl	= vchiq_ioctl,
+	.d_open		= vchiq_open,
+	.d_close	= vchiq_close,
 	.d_name		= DEVICE_NAME,
 };
 
@@ -340,20 +345,28 @@ service_callback(VCHIQ_REASON_T reason, VCHIQ_HEADER_T *header,
 *
 ***************************************************************************/
 
-#if 0
 static int
 vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
    struct thread *td)
 {
-   VCHIQ_INSTANCE_T instance = file->private_data;
+   VCHIQ_INSTANCE_T instance;
    VCHIQ_STATUS_T status = VCHIQ_SUCCESS;
    long ret = 0;
    int i, rc;
    DEBUG_INITIALISE(g_state.local)
 
+
+   if (ret = devfs_get_cdevpriv((void**)&instance)) {
+      printf("vchiq_ioctl: devfs_get_cdevpriv failed: error %d\n", ret);
+      return (ret);
+   }
+
+/* XXBSD: HACK! */
+#define _IOC_NR(x) ((x) & 0xff)
+
    vcos_log_trace("vchiq_ioctl - instance %x, cmd %s, arg %lx",
       (unsigned int)instance,
-      ((_IOC_TYPE(cmd) == VCHIQ_IOC_MAGIC) && (_IOC_NR(cmd) <= VCHIQ_IOC_MAX)) ?
+      ((IOCGROUP(cmd) == VCHIQ_IOC_MAGIC) && (_IOC_NR(cmd) <= VCHIQ_IOC_MAX)) ?
       ioctl_names[_IOC_NR(cmd)] : "<invalid>", arg);
 
    switch (cmd) {
@@ -947,6 +960,12 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
    return ret;
 }
 
+static void
+instance_dtr(void *data)
+{
+   free(data, M_VCHIQ);
+}
+
 /****************************************************************************
 *
 *   vchiq_open
@@ -954,122 +973,107 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 ***************************************************************************/
 
 static int
-vchiq_open(struct inode *inode, struct file *file)
+vchiq_open(struct cdev *dev, int flags, int fmt __unused, struct thread *td)
 {
-   int dev = iminor(inode) & 0x0f;
+   VCHIQ_STATE_T *state = vchiq_get_state();
+   VCHIQ_INSTANCE_T instance;
    vcos_log_info("vchiq_open");
-   switch (dev) {
-   case VCHIQ_MINOR:
-      {
-         VCHIQ_STATE_T *state = vchiq_get_state();
-         VCHIQ_INSTANCE_T instance;
 
-         if (!state)
-         {
-            vcos_log_error( "vchiq has no connection to VideoCore");
-            return ENOTCONN;
-         }
-
-         instance = kzalloc(sizeof(*instance), GFP_KERNEL);
-         if (!instance)
-            return ENOMEM;
-
-         instance->state = state;
-         instance->pid = current->tgid;
-         vcos_event_create(&instance->insert_event, DEVICE_NAME);
-         vcos_event_create(&instance->remove_event, DEVICE_NAME);
-
-         file->private_data = instance;
-      }
-      break;
-
-   default:
-      vcos_log_error("Unknown minor device: %d", dev);
-      return ENXIO;
+   if (!state)
+   {
+      vcos_log_error( "vchiq has no connection to VideoCore");
+      return ENOTCONN;
    }
+
+   instance = malloc(sizeof(*instance), M_VCHIQ, M_WAITOK | M_ZERO);
+   if (!instance)
+      return ENOMEM;
+
+   instance->state = state;
+   /* XXXBSD: PID or thread ID? */
+   instance->pid = td->td_proc->p_pid;
+   vcos_event_create(&instance->insert_event, DEVICE_NAME);
+   vcos_event_create(&instance->remove_event, DEVICE_NAME);
+
+   devfs_set_cdevpriv(instance, instance_dtr);
 
    return 0;
 }
 
 /****************************************************************************
 *
-*   vchiq_release
+*   vchiq_close
 *
 ***************************************************************************/
 
 static int
-vchiq_release(struct inode *inode, struct file *file)
+vchiq_close(struct cdev *dev, int flags __unused, int fmt __unused,
+                struct thread *td)
 {
-   int dev = iminor(inode) & 0x0f;
    int ret = 0;
-   switch (dev) {
-   case VCHIQ_MINOR:
-      {
-         VCHIQ_INSTANCE_T instance = file->private_data;
-         int i;
+   VCHIQ_INSTANCE_T instance;
+   int i;
 
-         vcos_log_info("vchiq_release: instance=%lx",
-                  (unsigned long)instance);
+   vcos_log_info("vchiq_close");
 
-         instance->closing = 1;
-
-         /* Wake the slot handler if the completion queue is full */
-         vcos_event_signal(&instance->remove_event);
-
-         /* Mark all services for termination... */
-
-         for (i = 0; i < MAX_SERVICES; i++) {
-            USER_SERVICE_T *user_service =
-                &instance->services[i];
-            if (user_service->service != NULL)
-            {
-               /* Wake the slot handler if the msg queue is full */
-               vcos_event_signal(&user_service->remove_event);
-
-               if ((user_service->service->srvstate != VCHIQ_SRVSTATE_CLOSEWAIT) &&
-                  (user_service->service->srvstate != VCHIQ_SRVSTATE_LISTENING))
-               {
-                  vchiq_terminate_service_internal(user_service->service);
-               }
-            }
-         }
-
-         /* ...and wait for them to die */
-
-         for (i = 0; i < MAX_SERVICES; i++) {
-            USER_SERVICE_T *user_service =
-                &instance->services[i];
-            if (user_service->service != NULL)
-            {
-               /* Wait in this non-portable fashion because interruptible
-                  calls will not block in this context. */
-               while ((user_service->service->srvstate != VCHIQ_SRVSTATE_CLOSEWAIT) &&
-                  (user_service->service->srvstate != VCHIQ_SRVSTATE_LISTENING))
-               {
-                  down(&user_service->service->remove_event);
-               }
-
-               vchiq_free_service_internal
-                      (user_service->service);
-            }
-         }
-
-         vcos_event_delete(&instance->insert_event);
-         vcos_event_delete(&instance->remove_event);
-
-         kfree(instance);
-         file->private_data = NULL;
-      }
-      break;
-
-   default:
-      vcos_log_error("Unknown minor device: %d", dev);
-      ret = ENXIO;
+   if (ret = devfs_get_cdevpriv((void**)&instance)) {
+      printf("devfs_get_cdevpriv failed: error %d\n", ret);
+      return (ret);
    }
+
+   vcos_log_info("vchiq_release: instance=%lx",
+            (unsigned long)instance);
+
+   instance->closing = 1;
+
+   /* Wake the slot handler if the completion queue is full */
+   vcos_event_signal(&instance->remove_event);
+
+   /* Mark all services for termination... */
+
+   for (i = 0; i < MAX_SERVICES; i++) {
+      USER_SERVICE_T *user_service =
+          &instance->services[i];
+      if (user_service->service != NULL)
+      {
+         /* Wake the slot handler if the msg queue is full */
+         vcos_event_signal(&user_service->remove_event);
+
+         if ((user_service->service->srvstate != VCHIQ_SRVSTATE_CLOSEWAIT) &&
+            (user_service->service->srvstate != VCHIQ_SRVSTATE_LISTENING))
+         {
+            vchiq_terminate_service_internal(user_service->service);
+         }
+      }
+   }
+
+   /* ...and wait for them to die */
+
+   for (i = 0; i < MAX_SERVICES; i++) {
+      USER_SERVICE_T *user_service =
+          &instance->services[i];
+      if (user_service->service != NULL)
+      {
+         /* Wait in this non-portable fashion because interruptible
+            calls will not block in this context. */
+         while ((user_service->service->srvstate != VCHIQ_SRVSTATE_CLOSEWAIT) &&
+            (user_service->service->srvstate != VCHIQ_SRVSTATE_LISTENING))
+         {
+            sema_wait(&user_service->service->remove_event);
+         }
+
+         vchiq_free_service_internal
+                (user_service->service);
+      }
+   }
+
+   vcos_event_delete(&instance->insert_event);
+   vcos_event_delete(&instance->remove_event);
+
+   devfs_clear_cdevpriv();
 
    return ret;
 }
-#endif
 
 /****************************************************************************
 *
@@ -1835,9 +1839,8 @@ vchiq_clone(void *arg, struct ucred *cred,
 
    if (*dev != NULL)
       return;
-   printf("----> %s\n", name);
-   // if (strcmp(name, "vchiq") == 0) {
-   // }
+   if (strcmp(name, "vchiq") == 0) {
+   }
 }
 
 
@@ -1860,17 +1863,12 @@ vchiq_init(void)
    vcos_log_set_level(VCOS_LOG_CATEGORY, vchiq_default_arm_log_level);
    vcos_log_register("vchiq_arm", VCOS_LOG_CATEGORY);
 
-   if (vchiq_ehtag == NULL)
-      vchiq_ehtag = EVENTHANDLER_REGISTER(dev_clone, vchiq_clone, 0, 1000);
-
-#if 0
    vchiq_cdev = make_dev(&vchiq_cdevsw, 0,
       UID_ROOT, GID_WHEEL, 0600, "vchiq");
    if (!vchiq_cdev) {
       printf("Failed to create /dev/vchiq");
       return (ENXIO);
    }
-#endif
 
 #if 0
    if ((err =
@@ -1910,12 +1908,10 @@ vchiq_init(void)
    return 0;
 
 failed_platform_init:
-#if 0
    if (vchiq_cdev) {
       destroy_dev(vchiq_cdev);
       vchiq_cdev = NULL;
    }
-#endif
 failed_platform_vcos_init:
    printf("[W] could not load vchiq\n");
    return err;
@@ -1934,11 +1930,9 @@ vchiq_exit(void)
    vchiq_ehtag = NULL;
 
    vchiq_platform_exit(&g_state);
-#if 0
    if (vchiq_cdev) {
       destroy_dev(vchiq_cdev);
       vchiq_cdev = NULL;
    }
-#endif
    vcos_log_unregister(VCOS_LOG_CATEGORY);
 }
