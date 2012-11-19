@@ -38,8 +38,9 @@ typedef struct pagelist_struct {
 } PAGELIST_T;
 
 typedef struct fragments_struct {
-	char headbuf[CACHE_LINE_SIZE];
-	char tailbuf[CACHE_LINE_SIZE];
+	/* XXXBSD: 32 or 64 */
+	char headbuf[32];
+	char tailbuf[32];
 } FRAGMENTS_T;
 
 #endif /* VCHIQ_PAGELIST_H */
