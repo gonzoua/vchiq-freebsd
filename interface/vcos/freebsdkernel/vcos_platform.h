@@ -88,7 +88,7 @@ typedef struct
 
 typedef struct VCOS_LLTHREAD_T
 {
-   struct thread *thread;             /**< The thread itself */
+   struct proc *proc;             /**< The thread itself */
    VCOS_SEMAPHORE_T suspend;     /**< For support event groups and similar - a per thread semaphore */
 } VCOS_LLTHREAD_T;
 
@@ -470,8 +470,13 @@ void _vcos_log_platform_unregister(struct VCOS_LOG_CAT_T *category);
  *
  ***********************************************************/
 
-#define vcos_wmb(x) wmb()
-#define vcos_rmb() rmb()
+#define vcos_wmb(x) do {\
+	__asm __volatile ("mcr p15, 0, %0, c7, c10, 4" : : "r" (0) : "memory"); \
+} while (0);
+
+#define vcos_rmb(x) do {\
+	__asm __volatile ("mcr p15, 0, %0, c7, c10, 4" : : "r" (0) : "memory"); \
+} while (0);
 
 #include "interface/vcos/generic/vcos_common.h"
 /*#include "interface/vcos/generic/vcos_generic_quickslow_mutex.h" */
