@@ -26,6 +26,9 @@
 
 #include <machine/bus.h>
 #include <arm/broadcom/bcm2835/bcm2835_mbox.h>
+#include <arm/broadcom/bcm2835/bcm2835_vcbus.h>
+#include <vm/vm.h>
+#include <vm/pmap.h>
 
 #define MAX_FRAGMENTS (VCHIQ_NUM_CURRENT_BULKS * 2)
 
@@ -70,7 +73,7 @@ vchiq_dmamap_cb(void *arg, bus_dma_segment_t *segs, int nseg, int err)
 		return;
 
 	addr = (bus_addr_t*)arg;
-	*addr = segs[0].ds_addr;
+	*addr = PHYS_TO_VCBUS(segs[0].ds_addr);
 }
 
 int
@@ -112,12 +115,15 @@ vchiq_platform_init(VCHIQ_STATE_T *state)
 
 	err = bus_dmamap_load(dma_tag, dma_map, g_slot_mem,
 	    g_slot_mem_size + frag_mem_size, vchiq_dmamap_cb,
-	    &g_slot_phys, BUS_DMA_NOWAIT | BUS_DMA_COHERENT);
+	    &g_slot_phys, 0);
 
 	if (err) {
 		vcos_log_error("cannot load DMA map\n");
 		goto failed_load;
 	}
+
+	pmap_change_attr((vm_offset_t)g_slot_mem, g_slot_mem_size + frag_mem_size,
+		BUS_DMA_NOCACHE);
 
 	vcos_assert(((int)g_slot_mem & (PAGE_SIZE - 1)) == 0);
 
