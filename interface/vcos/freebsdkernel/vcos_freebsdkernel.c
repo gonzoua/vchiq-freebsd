@@ -27,6 +27,8 @@ VideoCore OS Abstraction Layer - pthreads types
 #include "interface/vcos/vcos_build_info.h"
 #endif
 
+#include <sys/kthread.h>
+
 MALLOC_DEFINE(M_VCOS, "vcos", "VideoCore general purpose memory");
 
 VCOS_CFG_ENTRY_T  vcos_cfg_dir;
@@ -51,14 +53,15 @@ typedef void (*LEGACY_ENTRY_FN_T)(int, void *);
 /** Wrapper function around the real thread function. Posts the semaphore
   * when completed.
   */
-static void vcos_thread_wrapper(void *arg)
+static void 
+vcos_thread_wrapper(void *arg)
 {
    void *ret;
    VCOS_THREAD_T *thread = arg;
 
    vcos_assert(thread->magic == VCOS_THREAD_MAGIC);
 
-   thread->thread.thread = curthread;
+   thread->thread.proc = curproc;
 
    vcos_add_thread(thread);
 
@@ -92,7 +95,7 @@ VCOS_STATUS_T vcos_thread_create(VCOS_THREAD_T *thread,
                                  void *arg)
 {
    VCOS_STATUS_T st;
-   struct thread *kthread;
+   struct proc *newp;
 
    memset(thread, 0, sizeof(*thread));
    thread->magic     = VCOS_THREAD_MAGIC;
@@ -122,15 +125,10 @@ VCOS_STATUS_T vcos_thread_create(VCOS_THREAD_T *thread,
    /*required for event groups */
    vcos_timer_create(&thread->_timer.timer, thread->name, NULL, NULL);
 
-   kthread = NULL;
-#if 0
-   XXXBSD: implement me
-   kthread_create((void (*)(void *))vcos_thread_wrapper, (void*)thread, NULL, &kthread, 0, 0, "%s", name);
-   vcos_assert(kthread != NULL);
-   set_user_nice(kthread, attrs->ta_priority);
-   thread->thread.thread = kthread;
-   wake_up_process(kthread);
-#endif
+   newp = NULL;
+   if (kproc_create(&vcos_thread_wrapper, (void*)thread, &newp, 0, 0, "%s", name) != 0)
+      panic("kproc_create failed");
+   thread->thread.proc = newp;
    return VCOS_SUCCESS;
 }
 
