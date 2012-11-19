@@ -42,6 +42,9 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 #include <machine/fdt.h>
 
+#include "vchiq_arm.h"
+#include "vchiq_2835.h"
+
 #define	VCHIQ_LOCK	do {		\
 	mtx_lock(&bcm_vchiq_sc->lock);	\
 } while(0)
@@ -77,10 +80,36 @@ static struct bcm_vchiq_softc *bcm_vchiq_sc = NULL;
 void vchiq_exit(void);
 int vchiq_init(void);
 
+extern VCHIQ_STATE_T g_state;
+
 static void
 bcm_vchiq_intr(void *arg)
 {
-	struct bcm_vchiq_softc *sc = arg;
+	VCHIQ_STATE_T *state = &g_state;
+	unsigned int status;
+
+	/* Read (and clear) the doorbell */
+	status = vchiq_read_4(0x40);
+
+	if (status & 0x4) {  /* Was the doorbell rung? */
+		remote_event_pollall(state);
+	}
+}
+
+void
+remote_event_signal(REMOTE_EVENT_T *event)
+{
+	event->fired = 1;
+
+	/* The test on the next line also ensures the write on the previous line
+		has completed */
+
+	if (event->armed) {
+		/* trigger vc interrupt */
+ 		__asm __volatile ("mcr p15, 0, %0, c7, c10, 4" : : "r" (0) : "memory");
+
+		vchiq_write_4(0x48, 0);
+	}
 }
 
 static int
