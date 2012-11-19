@@ -99,7 +99,8 @@ VCOS_LOG_CAT_T vchiq_arm_log_category;
 
 static struct cdev    *vchiq_cdev;
 static dev_t          vchiq_devid;
-static VCHIQ_STATE_T g_state;
+/* XXXBSD: Fixme */
+VCHIQ_STATE_T g_state;
 static struct class  *vchiq_class;
 static struct device *vchiq_dev;
 
