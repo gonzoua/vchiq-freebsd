@@ -46,7 +46,7 @@ typedef struct vchiq_open_payload_struct{
    int client_id;
    short version;
    short version_min;
-} VCHIQ_OPEN_PAYLOAD_T;
+} __packed VCHIQ_OPEN_PAYLOAD_T;
 
 vcos_static_assert(sizeof(VCHIQ_HEADER_T) == 8);   /* we require this for consistency between endpoints */
 vcos_static_assert(IS_POW2(sizeof(VCHIQ_HEADER_T)));
@@ -55,8 +55,8 @@ vcos_static_assert(IS_POW2(VCHIQ_NUM_SERVICE_BULKS));
 
 VCOS_LOG_CAT_T vchiq_core_log_category;
 VCOS_LOG_CAT_T vchiq_core_msg_log_category;
-VCOS_LOG_LEVEL_T vchiq_default_core_log_level = VCOS_LOG_WARN;
-VCOS_LOG_LEVEL_T vchiq_default_core_msg_log_level = VCOS_LOG_WARN;
+VCOS_LOG_LEVEL_T vchiq_default_core_log_level = VCOS_LOG_TRACE;
+VCOS_LOG_LEVEL_T vchiq_default_core_msg_log_level = VCOS_LOG_TRACE;
 
 static const char *const srvstate_names[] =
 {
@@ -2579,7 +2579,7 @@ vchiq_dump_state(void *dump_context, VCHIQ_STATE_T *state)
 
    len = vcos_snprintf(buf, sizeof(buf),
       "  tx_pos=%x(@%x), rx_pos=%x(@%x)",
-      state->id, state->local->tx_pos,
+      state->local->tx_pos,
       (uint32_t)state->tx_data + (state->local_tx_pos & VCHIQ_SLOT_MASK),
       state->rx_pos,
       (uint32_t)state->rx_data + (state->rx_pos & VCHIQ_SLOT_MASK));
