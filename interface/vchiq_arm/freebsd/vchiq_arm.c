@@ -126,7 +126,7 @@ static const char *ioctl_names[] =
 
 vcos_static_assert(vcos_countof(ioctl_names) == (VCHIQ_IOC_MAX + 1));
 
-VCOS_LOG_LEVEL_T vchiq_default_arm_log_level = VCOS_LOG_TRACE;
+VCOS_LOG_LEVEL_T vchiq_default_arm_log_level = VCOS_LOG_ERROR;
 
 static eventhandler_tag vchiq_ehtag = NULL;
 static d_open_t		vchiq_open;

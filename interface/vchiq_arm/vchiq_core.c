@@ -55,8 +55,8 @@ vcos_static_assert(IS_POW2(VCHIQ_NUM_SERVICE_BULKS));
 
 VCOS_LOG_CAT_T vchiq_core_log_category;
 VCOS_LOG_CAT_T vchiq_core_msg_log_category;
-VCOS_LOG_LEVEL_T vchiq_default_core_log_level = VCOS_LOG_TRACE;
-VCOS_LOG_LEVEL_T vchiq_default_core_msg_log_level = VCOS_LOG_TRACE;
+VCOS_LOG_LEVEL_T vchiq_default_core_log_level = VCOS_LOG_ERROR;
+VCOS_LOG_LEVEL_T vchiq_default_core_msg_log_level = VCOS_LOG_ERROR;
 
 static const char *const srvstate_names[] =
 {
