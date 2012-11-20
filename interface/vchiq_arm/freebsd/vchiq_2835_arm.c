@@ -19,7 +19,7 @@
 #define TOTAL_SLOTS (VCHIQ_SLOT_ZERO_SLOTS + 2 * 32)
 
 #define VCHIQ_DOORBELL_IRQ IRQ_ARM_DOORBELL_0
-#define VCHIQ_ARM_ADDRESS(x) ((void *)__virt_to_bus((unsigned)x))
+#define VCHIQ_ARM_ADDRESS(x) ((void *)PHYS_TO_VCBUS(pmap_kextract((vm_offset_t)(x))))
 
 #include "vchiq_arm.h"
 #include "vchiq_2835.h"
@@ -27,14 +27,26 @@
 #include <machine/bus.h>
 #include <arm/broadcom/bcm2835/bcm2835_mbox.h>
 #include <arm/broadcom/bcm2835/bcm2835_vcbus.h>
+#include <sys/proc.h>
+
 #include <vm/vm.h>
 #include <vm/pmap.h>
+#include <vm/vm_extern.h>
+#include <vm/vm_kern.h>
+#include <vm/vm_map.h>
+#include <vm/vm_object.h>
+#include <vm/vm_page.h>
+#include <vm/vm_pager.h>
+#include <vm/vm_param.h>
+#include <vm/vm_phys.h>
 
 #define MAX_FRAGMENTS (VCHIQ_NUM_CURRENT_BULKS * 2)
 
 #define VCOS_LOG_CATEGORY (&vchiq_arm_log_category)
 
 #define PAGE_ALIGN(addr) round_page(addr)
+
+MALLOC_DEFINE(M_VCPAGELIST, "vcpagelist", "VideoCore pagelist memory");
 
 static char *g_slot_mem;
 static int g_slot_mem_size;
@@ -55,14 +67,12 @@ MTX_SYSINIT(g_free_fragments_mutex, &g_free_fragments_mutex, "vcos_frags", MTX_D
 static void
 vchiq_doorbell_irq(int irq, void *dev_id);
 
-#ifdef notyet
 static int
 create_pagelist(char *buf, size_t count, unsigned short type,
-	struct task_struct *task, PAGELIST_T ** ppagelist);
+	struct proc *p, PAGELIST_T ** ppagelist);
 
 static void
 free_pagelist(PAGELIST_T *pagelist, int actual);
-#endif
 
 static void
 vchiq_dmamap_cb(void *arg, bus_dma_segment_t *segs, int nseg, int err)
@@ -195,7 +205,6 @@ VCHIQ_STATUS_T
 vchiq_prepare_bulk_data(VCHIQ_BULK_T *bulk, VCHI_MEM_HANDLE_T memhandle,
 	void *offset, int size, int dir)
 {
-#ifdef notyet
 	PAGELIST_T *pagelist;
 	int ret;
 
@@ -205,7 +214,7 @@ vchiq_prepare_bulk_data(VCHIQ_BULK_T *bulk, VCHI_MEM_HANDLE_T memhandle,
 			(dir == VCHIQ_BULK_RECEIVE)
 			? PAGELIST_READ
 			: PAGELIST_WRITE,
-			current,
+			curproc,
 			&pagelist);
 	if (ret != 0)
 		return VCHIQ_ERROR;
@@ -216,7 +225,6 @@ vchiq_prepare_bulk_data(VCHIQ_BULK_T *bulk, VCHI_MEM_HANDLE_T memhandle,
 	/* Store the pagelist address in remote_data, which isn't used by the
 	   slave. */
 	bulk->remote_data = pagelist;
-#endif
 
 	return VCHIQ_SUCCESS;
 }
@@ -224,9 +232,7 @@ vchiq_prepare_bulk_data(VCHIQ_BULK_T *bulk, VCHI_MEM_HANDLE_T memhandle,
 void
 vchiq_complete_bulk(VCHIQ_BULK_T *bulk)
 {
-#ifdef notyet
 	free_pagelist((PAGELIST_T *)bulk->remote_data, bulk->actual);
-#endif
 }
 
 void
@@ -317,7 +323,6 @@ vchiq_platform_get_arm_state(VCHIQ_STATE_T *state)
  * Local functions
  */
 
-#ifdef notyet
 /* There is a potential problem with partial cache lines (pages?)
 	at the ends of the block when reading. If the CPU accessed anything in
 	the same line (page?) then it may have pulled old data into the cache,
@@ -333,13 +338,14 @@ vchiq_platform_get_arm_state(VCHIQ_STATE_T *state)
 
 static int
 create_pagelist(char *buf, size_t count, unsigned short type,
-	struct task_struct *task, PAGELIST_T ** ppagelist)
+	struct proc *p, PAGELIST_T ** ppagelist)
 {
 	PAGELIST_T *pagelist;
-	struct page **pages;
-	struct page *page;
+	vm_page_t *pages;
+	vm_page_t page;
 	unsigned long *addrs;
 	unsigned int num_pages, offset, i;
+	int pagelist_size;
 	char *addr, *base_addr, *next_addr;
 	int run, addridx, actual_pages;
 
@@ -349,31 +355,26 @@ create_pagelist(char *buf, size_t count, unsigned short type,
 	*ppagelist = NULL;
 
 	/* Allocate enough storage to hold the page pointers and the page list */
-	pagelist = (PAGELIST_T *) kmalloc(sizeof(PAGELIST_T) +
+	pagelist_size = sizeof(PAGELIST_T) +
 		(num_pages * sizeof(unsigned long)) +
-		(num_pages * sizeof(pages[0])),
-		GFP_KERNEL);
+		(num_pages * sizeof(vm_page_t));
+	pagelist = malloc(pagelist_size, M_VCPAGELIST, M_WAITOK | M_ZERO);
 
 	vcos_log_trace("create_pagelist - %x", (unsigned int)pagelist);
 	if (!pagelist)
 		return ENOMEM;
 
 	addrs = pagelist->addrs;
-	pages = (struct page **)(addrs + num_pages);
+	pages = (vm_page_t*)(addrs + num_pages);
 
-	down_read(&task->mm->mmap_sem);
-	actual_pages = get_user_pages(task, task->mm,
-		(unsigned long)buf & ~(PAGE_SIZE - 1), num_pages,
-		(type == PAGELIST_READ) /*Write */ , 0 /*Force */ ,
-		pages, NULL /*vmas */ );
-	up_read(&task->mm->mmap_sem);
+	actual_pages = vm_fault_quick_hold_pages(&p->p_vmspace->vm_map,
+	    (vm_offset_t)buf, count,
+	    (type == PAGELIST_READ ? VM_PROT_WRITE : 0 ) | VM_PROT_READ, pages, num_pages);
 
         if (actual_pages != num_pages)
 	{
-		for (i = 0; i < actual_pages; i++) {
-			page_cache_release(pages[i]);
-		}
-		kfree(pagelist);
+		vm_page_unhold_pages(pages, actual_pages);
+		free(pagelist, M_VCPAGELIST);
 		return EINVAL;
 	}
 
@@ -383,13 +384,13 @@ create_pagelist(char *buf, size_t count, unsigned short type,
 
 	/* Group the pages into runs of contiguous pages */
 
-	base_addr = VCHIQ_ARM_ADDRESS(page_address(pages[0]));
+	base_addr = (void *)PHYS_TO_VCBUS(VM_PAGE_TO_PHYS(pages[0]));
 	next_addr = base_addr + PAGE_SIZE;
 	addridx = 0;
 	run = 0;
 
 	for (i = 1; i < num_pages; i++) {
-		addr = VCHIQ_ARM_ADDRESS(page_address(pages[i]));
+		addr = (void *)PHYS_TO_VCBUS(VM_PAGE_TO_PHYS(pages[i]));
 		if ((addr == next_addr) && (run < (PAGE_SIZE - 1))) {
 			next_addr += PAGE_SIZE;
 			run++;
@@ -411,28 +412,22 @@ create_pagelist(char *buf, size_t count, unsigned short type,
 		((pagelist->offset + pagelist->length) & (CACHE_LINE_SIZE - 1)))) {
 		FRAGMENTS_T *fragments;
 
-		if (wait(&g_free_fragments_sema) != 0) {
-			kfree(pagelist);
-			return EINTR;
-		}
+		/* XXXBSD: interruptible? */
+		sema_wait(&g_free_fragments_sema);
 
 		vcos_assert(g_free_fragments != NULL);
 
-		down(&g_free_fragments_mutex);
+		mtx_lock(&g_free_fragments_mutex);
 		fragments = (FRAGMENTS_T *) g_free_fragments;
 		vcos_assert(fragments != NULL);
 		g_free_fragments = *(FRAGMENTS_T **) g_free_fragments;
-		up(&g_free_fragments_mutex);
+		mtx_unlock(&g_free_fragments_mutex);
 		pagelist->type =
 			 PAGELIST_READ_WITH_FRAGMENTS + (fragments -
 							 g_fragments_base);
 	}
 
-	for (page = virt_to_page(pagelist);
-		page <= virt_to_page(addrs + num_pages - 1); page++) {
-		flush_dcache_page(page);
-	}
-
+	cpu_dcache_wbinv_range((vm_offset_t)pagelist, pagelist_size);
 	*ppagelist = pagelist;
 
 	return 0;
@@ -441,7 +436,7 @@ create_pagelist(char *buf, size_t count, unsigned short type,
 static void
 free_pagelist(PAGELIST_T *pagelist, int actual)
 {
-	struct page **pages;
+	vm_page_t *pages;
 	unsigned int num_pages, i;
 
 	vcos_log_trace("free_pagelist - %x, %d", (unsigned int)pagelist, actual);
@@ -449,7 +444,7 @@ free_pagelist(PAGELIST_T *pagelist, int actual)
 	num_pages =
 		 (pagelist->length + pagelist->offset + PAGE_SIZE - 1) / PAGE_SIZE;
 
-	pages = (struct page **)(pagelist->addrs + num_pages);
+	pages = (vm_page_t *)(pagelist->addrs + num_pages);
 
 	/* Deal with any partial cache lines (fragments) */
 	if (pagelist->type >= PAGELIST_READ_WITH_FRAGMENTS) {
@@ -460,11 +455,13 @@ free_pagelist(PAGELIST_T *pagelist, int actual)
 
 		if (actual >= 0)
 		{
+			/* XXXBSD: might be inefficient */
+			void *page_address = pmap_mapdev(VM_PAGE_TO_PHYS(pages[0]), PAGE_SIZE*num_pages);
 			if ((head_bytes = (CACHE_LINE_SIZE - pagelist->offset) & (CACHE_LINE_SIZE - 1)) != 0) {
 				if (head_bytes > actual)
 					head_bytes = actual;
 
-				memcpy((char *)page_address(pages[0]) +
+				memcpy((char *)page_address +
 						 pagelist->offset, fragments->headbuf,
 						 head_bytes);
 			}
@@ -472,27 +469,27 @@ free_pagelist(PAGELIST_T *pagelist, int actual)
 				(tail_bytes =
 				(pagelist->offset + actual) & (CACHE_LINE_SIZE -
 										1)) != 0) {
-				memcpy((char *)page_address(pages[num_pages - 1]) +
+				memcpy((char *)page_address + PAGE_SIZE*(num_pages - 1) +
 						 ((pagelist->offset + actual) & (PAGE_SIZE -
 									1) & ~(CACHE_LINE_SIZE - 1)),
 						 fragments->tailbuf, tail_bytes);
 			}
+			pmap_qremove((vm_offset_t)page_address, PAGE_SIZE*num_pages);
 		}
 
-		down(&g_free_fragments_mutex);
+		mtx_lock(&g_free_fragments_mutex);
 		*(FRAGMENTS_T **) fragments = g_free_fragments;
 		g_free_fragments = fragments;
-		up(&g_free_fragments_mutex);
-		post(&g_free_fragments_sema);
+		mtx_unlock(&g_free_fragments_mutex);
+		sema_post(&g_free_fragments_sema);
 	}
 
 	for (i = 0; i < num_pages; i++) {
 		if (pagelist->type != PAGELIST_WRITE)
-			set_page_dirty(pages[i]);
-		page_cache_release(pages[i]);
+			vm_page_dirty(pages[i]);
 	}
 
-	kfree(pagelist);
-}
-#endif
+	vm_page_unhold_pages(pages, num_pages);
 
+	free(pagelist, M_VCPAGELIST);
+}
