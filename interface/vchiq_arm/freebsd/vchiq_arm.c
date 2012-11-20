@@ -675,7 +675,8 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
          if (ret == 0) {
             int msgbufcount = args.msgbufcount;
-            for (ret = 0; ret < args.count; ret++) {
+            int count = 0;
+            for (count = 0; count < args.count; count++) {
                VCHIQ_COMPLETION_DATA_T *completion;
                USER_SERVICE_T *service;
                VCHIQ_HEADER_T *header;
@@ -704,7 +705,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
                      vcos_log_error("header %x: msgbufsize %x < msglen %x",
                         (unsigned int)header, args.msgbufsize, msglen);
                      vcos_assert(0);
-                     if (ret == 0)
+                     if (count == 0)
                         ret = EMSGSIZE;
                      break;
                   }
@@ -719,7 +720,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
                      (const void __user *)&args.msgbufs[msgbufcount],
                      sizeof(msgbuf)) != 0)
                   {
-                     if (ret == 0)
+                     if (count == 0)
                         ret = EFAULT;
                      break;
                   }
@@ -727,7 +728,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
                   /* Copy the message to user space */
                   if (copy_to_user(msgbuf, header, msglen) != 0)
                   {
-                     if (ret == 0)
+                     if (count == 0)
                         ret = EFAULT;
                      break;
                   }
@@ -764,6 +765,18 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
                   break;
                }
             }
+
+            if (count != args.count)
+            {
+               if (copy_to_user((void __user *)
+                  &((VCHIQ_AWAIT_COMPLETION_T *)arg)->count,
+                  &count, sizeof(count)) != 0)
+               {
+                  ret = EFAULT;
+                  break;
+               }
+            }
+
          }
 
          if (ret != 0)
@@ -828,7 +841,14 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
                (copy_to_user((void __user *)args.buf, header->data,
                header->size) == 0))
             {
-               ret = header->size;
+               args.bufsize = header->size;
+               if (copy_to_user
+                   ((void __user *)arg, &args,
+                    sizeof(args)) != 0) {
+                  ret = EFAULT;
+                  break;
+               }
+
                vchiq_release_message(&user_service->service->base,
                   header);
                user_service->msg_remove++;
