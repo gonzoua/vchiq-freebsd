@@ -1080,7 +1080,7 @@ vchiq_close(struct cdev *dev, int flags __unused, int fmt __unused,
          while ((user_service->service->srvstate != VCHIQ_SRVSTATE_CLOSEWAIT) &&
             (user_service->service->srvstate != VCHIQ_SRVSTATE_LISTENING))
          {
-            sema_wait(&user_service->service->remove_event);
+            vcos_event_wait(&user_service->service->remove_event);
          }
 
          vchiq_free_service_internal

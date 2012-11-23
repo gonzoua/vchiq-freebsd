@@ -69,8 +69,29 @@ VideoCore OS Abstraction Layer - Linux kernel (partial) implementation.
 /*#define VCOS_MEM_H */
 /*#define VCOS_STRING_H */
 
-typedef struct sema           VCOS_SEMAPHORE_T;
-typedef struct sema           VCOS_EVENT_T;
+/*
+ * Use hand-made semaphore until FreeBSD adds sema_wait_sig
+ */
+struct xsema
+{
+	struct mtx	mtx;
+	struct cv	cv;
+	int		value;
+	int		waiters;
+};
+
+/*
+ * Use hand-made semaphore until FreeBSD adds sema_wait_sig
+ */
+struct event
+{
+	struct mtx	mtx;
+	struct cv	cv;
+	int		value;
+};
+
+typedef struct xsema           VCOS_SEMAPHORE_T;
+typedef struct event           VCOS_EVENT_T;
 typedef struct mtx            VCOS_MUTEX_T;
 typedef volatile int          VCOS_ONCE_T;
 
@@ -155,35 +176,74 @@ void  vcos_platform_free( void *ptr );
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_wait(VCOS_SEMAPHORE_T *sem) {
-   sema_wait(sem);
-   /* XXXBSD: how about interruptible */
+   int ret;
+
+   mtx_lock(&sem->mtx);
+   do {
+      while (sem->value == 0) {
+         sem->waiters++;
+         ret = cv_wait_sig(&sem->cv, &sem->mtx);
+         sem->waiters--;
+      }
+
+      if (ret == EINTR) {
+         mtx_unlock(&sem->mtx);
+         return VCOS_EINTR;
+      }
+
+   } while  (ret == ERESTART);
+
+   sem->value--;
+   mtx_unlock(&sem->mtx);
 
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_trywait(VCOS_SEMAPHORE_T *sem) {
-   if (sema_trywait(sem) == 0)
-      return VCOS_EAGAIN;
-   return VCOS_SUCCESS;
+   int ret;
+
+   mtx_lock(&sem->mtx);
+
+   if (sem->value > 0) {
+      /* Success. */
+      sem->value--;
+      ret = VCOS_SUCCESS;
+   } else {
+      ret = VCOS_EAGAIN;
+   }
+
+   mtx_unlock(&sem->mtx);
+   return (ret);
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_create(VCOS_SEMAPHORE_T *sem,
                                     const char *name,
                                     VCOS_UNSIGNED initial_count) {
-   sema_init(sem, initial_count, name);
+   bzero(sem, sizeof(*sem));
+   mtx_init(&sem->mtx, name, "sema backing lock",
+      MTX_DEF | MTX_NOWITNESS | MTX_QUIET);
+   cv_init(&sem->cv, name);
+   sem->value = initial_count;
+
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_semaphore_delete(VCOS_SEMAPHORE_T *sem) {
-   sema_destroy(sem);
+   mtx_destroy(&sem->mtx);
+   cv_destroy(&sem->cv);
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_semaphore_post(VCOS_SEMAPHORE_T *sem) {
-   sema_post(sem);
+   mtx_lock(&sem->mtx);
+   sem->value++;
+   if (sem->waiters && sem->value > 0)
+      cv_signal(&sem->cv);
+
+   mtx_unlock(&sem->mtx);
    return VCOS_SUCCESS;
 }
 
@@ -300,34 +360,68 @@ void _vcos_thread_sem_post(VCOS_THREAD_T *target) {
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_event_create(VCOS_EVENT_T *event, const char *debug_name)
 {
-   sema_init(event, 0, debug_name);
+   bzero(event, sizeof(*event));
+   mtx_init(&event->mtx, debug_name, "event backing lock",
+      MTX_DEF | MTX_NOWITNESS | MTX_QUIET);
+   cv_init(&event->cv, debug_name);
+   event->value = 0;
    return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_IMPL
 void vcos_event_signal(VCOS_EVENT_T *event)
 {
-   sema_post(event);
+   mtx_lock(&event->mtx);
+   event->value = 1;
+   cv_signal(&event->cv);
+   mtx_unlock(&event->mtx);
 }
 
 VCOS_INLINE_IMPL
 VCOS_STATUS_T vcos_event_wait(VCOS_EVENT_T *event)
 {
-   sema_wait(event);
-   /* XXXBSD: while (down_trylock(event) == 0) continue; */
-   return VCOS_SUCCESS;
+   int ret = 0;
+
+   mtx_lock(&event->mtx);
+   if (event->value == 0) {
+      do {
+         ret = cv_wait_sig(&event->cv, &event->mtx);
+      } while (ret == ERESTART);
+   }
+
+   if (ret != EINTR)
+      event->value = 0;
+
+   mtx_unlock(&event->mtx);
+
+   if (ret == EINTR)
+      return VCOS_EINTR;
+   else
+      return VCOS_SUCCESS;
 }
 
 VCOS_INLINE_DECL
 VCOS_STATUS_T vcos_event_try(VCOS_EVENT_T *event)
 {
-   return (sema_trywait(event) != 0) ? VCOS_SUCCESS : VCOS_EAGAIN;
+   int ret = 0;
+
+   mtx_lock(&event->mtx);
+   if (event->value == 0)
+      ret = VCOS_EAGAIN;
+   else {
+      ret = VCOS_SUCCESS;
+      event->value = 0;
+   }
+   mtx_unlock(&event->mtx);
+  
+   return ret;
 }
 
 VCOS_INLINE_IMPL
 void vcos_event_delete(VCOS_EVENT_T *event)
 {
-   sema_destroy(event);
+   mtx_destroy(&event->mtx);
+   cv_destroy(&event->cv);
 }
 
 /***********************************************************
@@ -413,10 +507,12 @@ VCOS_STATUS_T vcos_atomic_flags_create(VCOS_ATOMIC_FLAGS_T *atomic_flags)
 VCOS_INLINE_IMPL
 void vcos_atomic_flags_or(VCOS_ATOMIC_FLAGS_T *atomic_flags, uint32_t flags)
 {
-   uint32_t value;
+   uint32_t old_flags;
+   uint32_t new_flags;
    do {
-      value = atomic_load_acq_32(atomic_flags);
-   } while (atomic_cmpset_rel_32(atomic_flags, value, value | flags) != value);
+      old_flags = *atomic_flags;
+      new_flags = old_flags | flags;
+   } while (atomic_cmpset_rel_32(atomic_flags, old_flags, new_flags) == 0);
 }
 
 VCOS_INLINE_IMPL
