@@ -1,29 +1,39 @@
-/*
- * Copyright (c) 2010-2011 Broadcom Corporation. All rights reserved.
+/**
+ * Copyright (c) 2010-2012 Broadcom. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions, and the following disclaimer,
+ *    without modification.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. The names of the above-listed copyright holders may not be used
+ *    to endorse or promote products derived from this software without
+ *    specific prior written permission.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * ALTERNATIVELY, this software may be distributed under the terms of the
+ * GNU General Public License ("GPL") version 2, as published by the Free
+ * Software Foundation.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+ * IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
-/*=============================================================================
-Contains the protypes for the vchi functions.
-=============================================================================*/
 
 #ifndef VCHI_H_
 #define VCHI_H_
 
-#include "interface/vcos/vcos.h"
 #include "interface/vchi/vchi_cfg.h"
 #include "interface/vchi/vchi_common.h"
 #include "interface/vchi/connections/connection.h"
@@ -44,6 +54,12 @@ Contains the protypes for the vchi functions.
 #define VCHI_BULK_ALIGNED(x)      (((unsigned long)(x) & (VCHI_BULK_ALIGN-1)) == 0)
 #endif
 
+struct vchi_version {
+	uint32_t version;
+	uint32_t version_min;
+};
+#define VCHI_VERSION(v_) { v_, v_ }
+#define VCHI_VERSION_EX(v_, m_) { v_, m_ }
 
 typedef enum
 {
@@ -88,8 +104,8 @@ typedef struct vchi_msg_vector_ex {
 // Construct an entry in a msg vector for a message handle (h), starting at offset (o) of length (l)
 #define VCHI_VEC_HANDLE(h,o,l) VCHI_VEC_HANDLE,  { { (h), (o), (l) } }
 
-// Macros to manipulate fourcc_t values
-#define MAKE_FOURCC(x) ((fourcc_t)( (x[0] << 24) | (x[1] << 16) | (x[2] << 8) | x[3] ))
+// Macros to manipulate 'FOURCC' values
+#define MAKE_FOURCC(x) ((int32_t)( (x[0] << 24) | (x[1] << 16) | (x[2] << 8) | x[3] ))
 #define FOURCC_TO_CHAR(x) (x >> 24) & 0xFF,(x >> 16) & 0xFF,(x >> 8) & 0xFF, x & 0xFF
 
 
@@ -108,15 +124,22 @@ typedef struct
 
 // structure used to provide the information needed to open a server or a client
 typedef struct {
-   vcos_fourcc_t service_id;
-   VCHI_CONNECTION_T *connection;
-   uint32_t rx_fifo_size;
-   uint32_t tx_fifo_size;
-   VCHI_CALLBACK_T callback;
-   void *callback_param;
-   vcos_bool_t want_unaligned_bulk_rx;    // client intends to receive bulk transfers of odd lengths or into unaligned buffers
-   vcos_bool_t want_unaligned_bulk_tx;    // client intends to transmit bulk transfers of odd lengths or out of unaligned buffers
-   vcos_bool_t want_crc;                  // client wants to check CRCs on (bulk) transfers. Only needs to be set at 1 end - will do both directions.
+	struct vchi_version version;
+	int32_t service_id;
+	VCHI_CONNECTION_T *connection;
+	uint32_t rx_fifo_size;
+	uint32_t tx_fifo_size;
+	VCHI_CALLBACK_T callback;
+	void *callback_param;
+	/* client intends to receive bulk transfers of
+		odd lengths or into unaligned buffers */
+	int32_t want_unaligned_bulk_rx;
+	/* client intends to transmit bulk transfers of
+		odd lengths or out of unaligned buffers */
+	int32_t want_unaligned_bulk_tx;
+	/* client wants to check CRCs on (bulk) xfers.
+		Only needs to be set at 1 end - will do both directions. */
+	int32_t want_crc;
 } SERVICE_CREATION_T;
 
 // Opaque handle for a VCHI instance
@@ -269,7 +292,7 @@ extern uint32_t vchi_held_msg_rx_timestamp( const VCHI_HELD_MSG_T *message );
 extern int32_t vchi_held_msg_release( VCHI_HELD_MSG_T *message );
 
 // Indicates whether the iterator has a next message.
-extern vcos_bool_t vchi_msg_iter_has_next( const VCHI_MSG_ITER_T *iter );
+extern int32_t vchi_msg_iter_has_next( const VCHI_MSG_ITER_T *iter );
 
 // Return the pointer and length for the next message and advance the iterator.
 extern int32_t vchi_msg_iter_next( VCHI_MSG_ITER_T *iter,
@@ -314,7 +337,7 @@ int32_t vchi_bulk_queue_receive_reloc( const VCHI_SERVICE_HANDLE_T handle,
 
 // Routine to queue up data ready for transfer to the other (once they have signalled they are ready)
 extern int32_t vchi_bulk_queue_transmit( VCHI_SERVICE_HANDLE_T handle,
-                                         const void *data_src,
+                                         void *data_src,
                                          uint32_t data_size,
                                          VCHI_FLAGS_T flags,
                                          void *transfer_handle );

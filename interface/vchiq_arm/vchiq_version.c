@@ -30,30 +30,30 @@
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+#include "vchiq_build_info.h"
+#include <linux/broadcom/vc_debug_sym.h>
 
-#ifndef VCHIQ_PAGELIST_H
-#define VCHIQ_PAGELIST_H
+VC_DEBUG_DECLARE_STRING_VAR( vchiq_build_hostname, "dc4-arm-01" );
+VC_DEBUG_DECLARE_STRING_VAR( vchiq_build_version, "9245b4c35b99b3870e1f7dc598c5692b3c66a6f0 (tainted)" );
+VC_DEBUG_DECLARE_STRING_VAR( vchiq_build_time,    __TIME__ );
+VC_DEBUG_DECLARE_STRING_VAR( vchiq_build_date,    __DATE__ );
 
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
-#endif
-#undef CACHE_LINE_SIZE
-#define CACHE_LINE_SIZE 32
-#define PAGELIST_WRITE 0
-#define PAGELIST_READ 1
-#define PAGELIST_READ_WITH_FRAGMENTS 2
+const char *vchiq_get_build_hostname( void )
+{
+   return vchiq_build_hostname;
+}
 
-typedef struct pagelist_struct {
-	unsigned long length;
-	unsigned short type;
-	unsigned short offset;
-	unsigned long addrs[1];	/* N.B. 12 LSBs hold the number of following
-				   pages at consecutive addresses. */
-} PAGELIST_T;
+const char *vchiq_get_build_version( void )
+{
+   return vchiq_build_version;
+}
 
-typedef struct fragments_struct {
-	char headbuf[CACHE_LINE_SIZE];
-	char tailbuf[CACHE_LINE_SIZE];
-} FRAGMENTS_T;
+const char *vchiq_get_build_date( void )
+{
+   return vchiq_build_date;
+}
 
-#endif /* VCHIQ_PAGELIST_H */
+const char *vchiq_get_build_time( void )
+{
+   return vchiq_build_time;
+}

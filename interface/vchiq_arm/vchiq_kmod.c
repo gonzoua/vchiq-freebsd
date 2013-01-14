@@ -128,7 +128,6 @@ static int
 bcm_vchiq_attach(device_t dev)
 {
 	struct bcm_vchiq_softc *sc = device_get_softc(dev);
-	int i;
 	int rid = 0;
 
 	if (bcm_vchiq_sc != NULL)

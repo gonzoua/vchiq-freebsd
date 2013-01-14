@@ -1,26 +1,46 @@
-/*
- * Copyright (c) 2010-2011 Broadcom Corporation. All rights reserved.
+/**
+ * Copyright (c) 2010-2012 Broadcom. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions, and the following disclaimer,
+ *    without modification.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. The names of the above-listed copyright holders may not be used
+ *    to endorse or promote products derived from this software without
+ *    specific prior written permission.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * ALTERNATIVELY, this software may be distributed under the terms of the
+ * GNU General Public License ("GPL") version 2, as published by the Free
+ * Software Foundation.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+ * IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef _VCHI_MESSAGE_H_
 #define _VCHI_MESSAGE_H_
 
+#ifdef __linux__
+#include <linux/kernel.h>
+#include <linux/types.h>
+#include <linux/semaphore.h>
+#endif
+
 #include "interface/vchi/vchi_cfg_internal.h"
-#include "interface/vcos/vcos.h"
 #include "interface/vchi/vchi_common.h"
 
 
@@ -63,7 +83,7 @@ typedef struct rx_msg_slot_info {
    struct rx_msg_slot_info *next;
    //struct slot_info *prev;
 #if !defined VCHI_COARSE_LOCKING
-   VCOS_SEMAPHORE_T   sem;
+   struct semaphore   sem;
 #endif
 
    uint8_t           *addr;               // base address of slot
@@ -84,7 +104,7 @@ typedef struct rx_msg_slot_info {
 typedef struct rx_bulk_slotinfo_t {
    struct rx_bulk_slotinfo_t *next;
 
-   VCOS_SEMAPHORE_T *blocking;
+   struct semaphore *blocking;
 
    // needed by DMA
    void        *addr;
@@ -127,7 +147,7 @@ typedef struct {
       uint16_t slot_delta;     // whether this message indicated slot delta
       uint32_t len;            // length of message
       RX_MSG_SLOTINFO_T *slot; // slot this message is in
-      vcos_fourcc_t service;   // service id this message is destined for
+      int32_t  service;   // service id this message is destined for
       uint32_t tx_timestamp;   // timestamp from the header
       uint32_t rx_timestamp;   // timestamp when we parsed it
    } message;
@@ -156,14 +176,14 @@ struct opaque_vchi_message_driver_t {
    VCHI_MDRIVER_HANDLE_T *(*open)( VCHI_MESSAGE_DRIVER_OPEN_T *params, void *state );
    int32_t (*suspending)( VCHI_MDRIVER_HANDLE_T *handle );
    int32_t (*resumed)( VCHI_MDRIVER_HANDLE_T *handle );
-   int32_t (*power_control)( VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T, vcos_bool_t enable );
+   int32_t (*power_control)( VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T, int32_t enable );
    int32_t (*add_msg_rx_slot)( VCHI_MDRIVER_HANDLE_T *handle, RX_MSG_SLOTINFO_T *slot );      // rx message
    int32_t (*add_bulk_rx)( VCHI_MDRIVER_HANDLE_T *handle, void *data, uint32_t len, RX_BULK_SLOTINFO_T *slot );  // rx data (bulk)
    int32_t (*send)( VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T channel, const void *data, uint32_t len, VCHI_MSG_FLAGS_T flags, void *send_handle );      // tx (message & bulk)
    void    (*next_event)( VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_EVENT_T *event );     // get the next event from message_driver
    int32_t (*enable)( VCHI_MDRIVER_HANDLE_T *handle );
-   int32_t (*form_message)( VCHI_MDRIVER_HANDLE_T *handle, vcos_fourcc_t service_id, VCHI_MSG_VECTOR_T *vector, uint32_t count, void
-                            *address, uint32_t length_avail, uint32_t max_total_length, vcos_bool_t pad_to_fill, vcos_bool_t allow_partial );
+   int32_t (*form_message)( VCHI_MDRIVER_HANDLE_T *handle, int32_t service_id, VCHI_MSG_VECTOR_T *vector, uint32_t count, void
+                            *address, uint32_t length_avail, uint32_t max_total_length, int32_t pad_to_fill, int32_t allow_partial );
 
    int32_t (*update_message)( VCHI_MDRIVER_HANDLE_T *handle, void *dest, int16_t *slot_count );
    int32_t (*buffer_aligned)( VCHI_MDRIVER_HANDLE_T *handle, int tx, int uncached, const void *address, const uint32_t length );
@@ -172,7 +192,7 @@ struct opaque_vchi_message_driver_t {
    int     (*rx_slot_size)( VCHI_MDRIVER_HANDLE_T *handle, int msg_size );
    int     (*tx_slot_size)( VCHI_MDRIVER_HANDLE_T *handle, int msg_size );
 
-   vcos_bool_t  (*tx_supports_terminate)( const VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T channel );
+   int32_t  (*tx_supports_terminate)( const VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T channel );
    uint32_t (*tx_bulk_chunk_size)( const VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T channel );
    int     (*tx_alignment)( const VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_TX_CHANNEL_T channel );
    int     (*rx_alignment)( const VCHI_MDRIVER_HANDLE_T *handle, MESSAGE_RX_CHANNEL_T channel );
