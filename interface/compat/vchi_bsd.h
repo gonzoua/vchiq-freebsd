@@ -241,9 +241,14 @@ struct semaphore {
 	int		waiters;
 };
 
-#define	DEFINE_SEMAPHORE(s)		\
-	struct semaphore s;
+#define	DEFINE_SEMAPHORE(name)		\
+	struct semaphore name;		\
+	SYSINIT(name##_sema_sysinit, SI_SUB_LOCK, SI_ORDER_MIDDLE,	\
+	    sema_sysinit, &name);					\
+	SYSUNINIT(name##_sema_sysuninit, SI_SUB_LOCK, SI_ORDER_MIDDLE,	\
+	    _sema_destroy, __DEVOLATILE(void *, &(name)))
 
+void sema_sysinit(void *arg);
 void _sema_init(struct semaphore *s, int value);
 void _sema_destroy(struct semaphore *s);
 void down(struct semaphore *s);

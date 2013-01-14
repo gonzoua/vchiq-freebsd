@@ -246,6 +246,15 @@ complete_all(struct completion *c)
 /*
  * Semaphore API
  */
+
+void sema_sysinit(void *arg)
+{
+	struct semaphore *s = arg;
+
+	printf("sema_sysinit\n");
+	_sema_init(s, 1);
+}
+
 void
 _sema_init(struct semaphore *s, int value)
 {
