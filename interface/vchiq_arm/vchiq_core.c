@@ -103,7 +103,7 @@ static const char *const reason_names[] = {
 	"BULK_RECEIVE_ABORTED"
 };
 
-static const char *const conn_state_names[] = {
+const char *const conn_state_names[] = {
 	"DISCONNECTED",
 	"CONNECTING",
 	"CONNECTED",
