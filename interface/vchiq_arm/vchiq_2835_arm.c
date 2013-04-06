@@ -54,6 +54,7 @@
 #include <interface/compat/vchi_bsd.h>
 
 #include <sys/malloc.h>
+#include <sys/rwlock.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
