@@ -77,7 +77,7 @@ int test_and_clear_bit(int nr, volatile void *addr)
 /*
  * Atomic API
  */
-typedef volatile int atomic_t;
+typedef volatile unsigned atomic_t;
 
 #define atomic_set(p, v)	(*(p) = (v))
 #define atomic_read(p)		(*(p))
@@ -123,6 +123,7 @@ atomic_xchg(atomic_t *v, int newv)
 			oldv = atomic_load_acq_int(v);
 		} while (!atomic_cmpset_rel_int(v, oldv, newv));
 	}
+	return 0;
 }
 
 /*
