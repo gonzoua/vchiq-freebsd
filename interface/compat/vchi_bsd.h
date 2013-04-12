@@ -123,6 +123,8 @@ atomic_xchg(atomic_t *v, int newv)
 			oldv = atomic_load_acq_int(v);
 		} while (!atomic_cmpset_rel_int(v, oldv, newv));
 	}
+
+	return (oldv);
 }
 
 /*
