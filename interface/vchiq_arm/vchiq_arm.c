@@ -790,7 +790,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 		if (ret == 0) {
 			int msgbufcount = args.msgbufcount;
-			int count = 0;
+			int count;
 			for (count = 0; count < args.count; count++) {
 				VCHIQ_COMPLETION_DATA_T *completion;
 				VCHIQ_SERVICE_T *service1;
@@ -869,7 +869,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 				if (copy_to_user((void __user *)(
 					(size_t)args.buf +
-					ret * sizeof(VCHIQ_COMPLETION_DATA_T)),
+					count * sizeof(VCHIQ_COMPLETION_DATA_T)),
 					completion,
 					sizeof(VCHIQ_COMPLETION_DATA_T)) != 0) {
 						if (ret == 0)
@@ -892,7 +892,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 			 if (count != args.count)
 			 {
-				 if (copy_to_user((void __user *)
+				if (copy_to_user((void __user *)
 					&((VCHIQ_AWAIT_COMPLETION_T *)arg)->count,
 					&count, sizeof(count)) != 0)
 				{
