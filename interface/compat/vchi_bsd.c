@@ -41,6 +41,8 @@
 
 #include <machine/stdarg.h>
 
+#include "mbox_if.h"
+
 #include <interface/compat/vchi_bsd.h>
 
 MALLOC_DEFINE(M_VCHI, "VCHI", "VCHI");
@@ -515,4 +517,15 @@ void
 wake_up_process(VCHIQ_THREAD_T thr)
 {
 	/* NOOP */
+}
+
+void
+bcm_mbox_write(int channel, uint32_t data)
+{
+	device_t mbox;
+
+        mbox = devclass_get_device(devclass_find("mbox"), 0);
+
+        if (mbox)
+                MBOX_WRITE(mbox, channel, data);
 }

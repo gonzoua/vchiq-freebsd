@@ -409,6 +409,11 @@ void flush_signals(VCHIQ_THREAD_T);
 int fatal_signal_pending(VCHIQ_THREAD_T);
 
 /*
+ * mbox API
+ */
+void bcm_mbox_write(int channel, uint32_t data);
+
+/*
  * Misc API
  */
 
@@ -426,7 +431,6 @@ typedef	void	irqreturn_t;
 typedef	off_t	loff_t;
 
 #define BCM2835_MBOX_CHAN_VCHIQ	3
-#define bcm_mbox_write	bcmmbox_write
 
 #define smp_mb	wmb
 #define smp_rmb	rmb
