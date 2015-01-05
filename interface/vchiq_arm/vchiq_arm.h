@@ -34,11 +34,6 @@
 #ifndef VCHIQ_ARM_H
 #define VCHIQ_ARM_H
 
-#ifdef __linux__
-#include <linux/mutex.h>
-#include <linux/semaphore.h>
-#include <linux/atomic.h>
-#endif
 #include "vchiq_core.h"
 
 
@@ -71,7 +66,7 @@ enum USE_TYPE_E {
 
 typedef struct vchiq_arm_state_struct {
 	/* Keepalive-related data */
-	struct proc *ka_thread;
+	VCHIQ_THREAD_T ka_thread;
 	struct completion ka_evt;
 	atomic_t ka_use_count;
 	atomic_t ka_use_ack_count;

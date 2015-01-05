@@ -34,11 +34,7 @@
 #ifndef VCHI_MH_H_
 #define VCHI_MH_H_
 
-#ifdef __linux__
-#include <linux/types.h>
-#else
 #include <sys/types.h>
-#endif
 
 typedef int32_t VCHI_MEM_HANDLE_T;
 #define VCHI_MEM_HANDLE_INVALID 0

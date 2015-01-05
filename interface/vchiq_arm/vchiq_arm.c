@@ -31,22 +31,6 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef __linux__
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/types.h>
-#include <linux/errno.h>
-#include <linux/cdev.h>
-#include <linux/fs.h>
-#include <linux/device.h>
-#include <linux/mm.h>
-#include <linux/highmem.h>
-#include <linux/pagemap.h>
-#include <linux/bug.h>
-#include <linux/semaphore.h>
-#include <linux/list.h>
-#include <linux/proc_fs.h>
-#endif
 
 #include "vchiq_core.h"
 #include "vchiq_ioctl.h"
@@ -298,10 +282,10 @@ service_callback(VCHIQ_REASON_T reason, VCHIQ_HEADER_T *header,
 		return VCHIQ_SUCCESS;
 
 	vchiq_log_trace(vchiq_arm_log_level,
-		"service_callback - service %lx(%d), reason %d, header %lx, "
+		"service_callback - service %lx(%d), handle %x, reason %d, header %lx, "
 		"instance %lx, bulk_userdata %lx",
 		(unsigned long)user_service,
-		service->localport,
+		service->localport, service->handle,
 		reason, (unsigned long)header,
 		(unsigned long)instance, (unsigned long)bulk_userdata);
 
@@ -377,6 +361,22 @@ service_callback(VCHIQ_REASON_T reason, VCHIQ_HEADER_T *header,
 
 /****************************************************************************
 *
+*   user_service_free
+*
+***************************************************************************/
+static void
+user_service_free(void *userdata)
+{
+	USER_SERVICE_T *user_service = userdata;
+	
+	_sema_destroy(&user_service->insert_event);
+	_sema_destroy(&user_service->remove_event);
+
+	kfree(user_service);
+}
+
+/****************************************************************************
+*
 *   vchiq_ioctl
 *
 ***************************************************************************/
@@ -437,7 +437,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			ret = -EINVAL;
 			break;
 		}
-		rc = mutex_lock_interruptible(&instance->state->mutex);
+		rc = lmutex_lock_interruptible(&instance->state->mutex);
 		if (rc != 0) {
 			vchiq_log_error(vchiq_arm_log_level,
 				"vchiq: connect: could not lock mutex for "
@@ -447,7 +447,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			break;
 		}
 		status = vchiq_connect_internal(instance->state, instance);
-		mutex_unlock(&instance->state->mutex);
+		lmutex_unlock(&instance->state->mutex);
 
 		if (status == VCHIQ_SUCCESS)
 			instance->connected = 1;
@@ -495,7 +495,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 		service = vchiq_add_service_internal(
 				instance->state,
 				&args.params, srvstate,
-				instance);
+				instance, user_service_free);
 
 		if (service != NULL) {
 			user_service->service = service;
@@ -518,12 +518,13 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 					service = NULL;
 					ret = (status == VCHIQ_RETRY) ?
 						-EINTR : -EIO;
-					user_service->service = NULL;
-					user_service->instance = NULL;
 					break;
 				}
 			}
 
+#ifdef VCHIQ_IOCTL_DEBUG
+			printf("%s: [CREATE SERVICE] handle = %08x\n", __func__, service->handle);
+#endif
 			if (copy_to_user((void __user *)
 				&(((VCHIQ_CREATE_SERVICE_T __user *)
 					arg)->handle),
@@ -542,7 +543,18 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	} break;
 
 	case VCHIQ_IOC_CLOSE_SERVICE: {
-		VCHIQ_SERVICE_HANDLE_T handle = (VCHIQ_SERVICE_HANDLE_T)arg;
+		VCHIQ_SERVICE_HANDLE_T handle;
+
+		if (copy_from_user
+			 (&handle, (const void __user *)arg,
+			  sizeof(handle)) != 0) {
+			ret = -EFAULT;
+			break;
+		}
+
+#ifdef VCHIQ_IOCTL_DEBUG
+		printf("%s: [CLOSE SERVICE] handle = %08x\n", __func__, handle);
+#endif
 
 		service = find_service_for_instance(instance, handle);
 		if (service != NULL)
@@ -552,7 +564,18 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	} break;
 
 	case VCHIQ_IOC_REMOVE_SERVICE: {
-		VCHIQ_SERVICE_HANDLE_T handle = (VCHIQ_SERVICE_HANDLE_T)arg;
+		VCHIQ_SERVICE_HANDLE_T handle;
+
+		if (copy_from_user
+			 (&handle, (const void __user *)arg,
+			  sizeof(handle)) != 0) {
+			ret = -EFAULT;
+			break;
+		}
+
+#ifdef VCHIQ_IOCTL_DEBUG
+		printf("%s: [REMOVE SERVICE] handle = %08x\n", __func__, handle);
+#endif
 
 		service = find_service_for_instance(instance, handle);
 		if (service != NULL)
@@ -563,7 +586,19 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 	case VCHIQ_IOC_USE_SERVICE:
 	case VCHIQ_IOC_RELEASE_SERVICE:	{
-		VCHIQ_SERVICE_HANDLE_T handle = (VCHIQ_SERVICE_HANDLE_T)arg;
+		VCHIQ_SERVICE_HANDLE_T handle;
+
+		if (copy_from_user
+			 (&handle, (const void __user *)arg,
+			  sizeof(handle)) != 0) {
+			ret = -EFAULT;
+			break;
+		}
+
+#ifdef VCHIQ_IOCTL_DEBUG
+		printf("%s: [%s SERVICE] handle = %08x\n", __func__,
+		    cmd == VCHIQ_IOC_USE_SERVICE ? "USE" : "RELEASE", handle);
+#endif
 
 		service = find_service_for_instance(instance, handle);
 		if (service != NULL) {
@@ -573,7 +608,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			if (status != VCHIQ_SUCCESS) {
 				vchiq_log_error(vchiq_susp_log_level,
 					"%s: cmd %s returned error %d for "
-					"service %c%c%c%c:%03d",
+					"service %c%c%c%c:%8x",
 					__func__,
 					(cmd == VCHIQ_IOC_USE_SERVICE) ?
 						"VCHIQ_IOC_USE_SERVICE" :
@@ -596,6 +631,10 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			ret = -EFAULT;
 			break;
 		}
+
+#ifdef VCHIQ_IOCTL_DEBUG
+		printf("%s: [QUEUE MESSAGE] handle = %08x\n", __func__, args.handle);
+#endif
 
 		service = find_service_for_instance(instance, args.handle);
 
@@ -645,7 +684,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			args.userdata = &waiter->bulk_waiter;
 		} else if (args.mode == VCHIQ_BULK_MODE_WAITING) {
 			struct list_head *pos;
-			mutex_lock(&instance->bulk_waiter_list_mutex);
+			lmutex_lock(&instance->bulk_waiter_list_mutex);
 			list_for_each(pos, &instance->bulk_waiter_list) {
 				if (list_entry(pos, struct bulk_waiter_node,
 					list)->pid == current->p_pid) {
@@ -657,7 +696,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 				}
 
 			}
-			mutex_unlock(&instance->bulk_waiter_list_mutex);
+			lmutex_unlock(&instance->bulk_waiter_list_mutex);
 			if (!waiter) {
 				vchiq_log_error(vchiq_arm_log_level,
 					"no bulk_waiter found for pid %d",
@@ -687,14 +726,15 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 				waiter->bulk_waiter.bulk->userdata = NULL;
 				spin_unlock(&bulk_waiter_spinlock);
 			}
+			_sema_destroy(&waiter->bulk_waiter.event);
 			kfree(waiter);
 		} else {
 			const VCHIQ_BULK_MODE_T mode_waiting =
 				VCHIQ_BULK_MODE_WAITING;
 			waiter->pid = current->p_pid;
-			mutex_lock(&instance->bulk_waiter_list_mutex);
+			lmutex_lock(&instance->bulk_waiter_list_mutex);
 			list_add(&waiter->list, &instance->bulk_waiter_list);
-			mutex_unlock(&instance->bulk_waiter_list_mutex);
+			lmutex_unlock(&instance->bulk_waiter_list_mutex);
 			vchiq_log_info(vchiq_arm_log_level,
 				"saved bulk_waiter %x for pid %d",
 				(unsigned int)waiter, current->p_pid);
@@ -723,17 +763,16 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			break;
 		}
 
-		mutex_lock(&instance->completion_mutex);
+		lmutex_lock(&instance->completion_mutex);
 
 		DEBUG_TRACE(AWAIT_COMPLETION_LINE);
 		while ((instance->completion_remove ==
 			instance->completion_insert)
 			&& !instance->closing) {
-			int rc;
 			DEBUG_TRACE(AWAIT_COMPLETION_LINE);
-			mutex_unlock(&instance->completion_mutex);
+			lmutex_unlock(&instance->completion_mutex);
 			rc = down_interruptible(&instance->insert_event);
-			mutex_lock(&instance->completion_mutex);
+			lmutex_lock(&instance->completion_mutex);
 			if (rc != 0) {
 				DEBUG_TRACE(AWAIT_COMPLETION_LINE);
 				vchiq_log_info(vchiq_arm_log_level,
@@ -754,7 +793,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			int count = 0;
 			for (count = 0; count < args.count; count++) {
 				VCHIQ_COMPLETION_DATA_T *completion;
-				VCHIQ_SERVICE_T *service;
+				VCHIQ_SERVICE_T *service1;
 				USER_SERVICE_T *user_service;
 				VCHIQ_HEADER_T *header;
 				if (instance->completion_remove ==
@@ -764,8 +803,8 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 					instance->completion_remove &
 					(MAX_COMPLETIONS - 1)];
 
-				service = completion->service_userdata;
-				user_service = service->base.userdata;
+				service1 = completion->service_userdata;
+				user_service = service1->base.userdata;
 				completion->service_userdata =
 					user_service->userdata;
 
@@ -816,7 +855,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 					/* Now it has been copied, the message
 					** can be released. */
-					vchiq_release_message(service->handle,
+					vchiq_release_message(service1->handle,
 						header);
 
 					/* The completion must point to the
@@ -825,10 +864,8 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 				}
 
 				if (completion->reason ==
-					VCHIQ_SERVICE_CLOSED) {
-					unlock_service(service);
-					kfree(user_service);
-				}
+					VCHIQ_SERVICE_CLOSED)
+					unlock_service(service1);
 
 				if (copy_to_user((void __user *)(
 					(size_t)args.buf +
@@ -867,7 +904,18 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 		if (ret != 0)
 			up(&instance->remove_event);
-		mutex_unlock(&instance->completion_mutex);
+
+		if ((ret == 0) && instance->closing)
+			ret = -ENOTCONN;
+		/* 
+		 * XXXBSD: ioctl return codes are not negative as in linux, so
+		 * we can not indicate success with positive number of passed 
+		 * messages
+		 */
+		if (ret > 0)
+			ret = 0;
+
+		lmutex_unlock(&instance->completion_mutex);
 		DEBUG_TRACE(AWAIT_COMPLETION_LINE);
 	} break;
 
@@ -962,7 +1010,14 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	} break;
 
 	case VCHIQ_IOC_GET_CLIENT_ID: {
-		VCHIQ_SERVICE_HANDLE_T handle = (VCHIQ_SERVICE_HANDLE_T)arg;
+		VCHIQ_SERVICE_HANDLE_T handle;
+
+		if (copy_from_user
+			 (&handle, (const void __user *)arg,
+			  sizeof(handle)) != 0) {
+			ret = -EFAULT;
+			break;
+		}
 
 		ret = vchiq_get_client_id(handle);
 	} break;
@@ -1111,8 +1166,8 @@ vchiq_open(struct cdev *dev, int flags, int fmt __unused, struct thread *td)
 
 		_sema_init(&instance->insert_event, 0);
 		_sema_init(&instance->remove_event, 0);
-		mutex_init(&instance->completion_mutex);
-		mutex_init(&instance->bulk_waiter_list_mutex);
+		lmutex_init(&instance->completion_mutex);
+		lmutex_init(&instance->bulk_waiter_list_mutex);
 		INIT_LIST_HEAD(&instance->bulk_waiter_list);
 
 		devfs_set_cdevpriv(instance, instance_dtr);
@@ -1161,13 +1216,13 @@ vchiq_close(struct cdev *dev, int flags __unused, int fmt __unused,
 		vchiq_use_internal(instance->state, NULL,
 				USE_TYPE_VCHIQ);
 
-		mutex_lock(&instance->completion_mutex);
+		lmutex_lock(&instance->completion_mutex);
 
 		/* Wake the completion thread and ask it to exit */
 		instance->closing = 1;
 		up(&instance->insert_event);
 
-		mutex_unlock(&instance->completion_mutex);
+		lmutex_unlock(&instance->completion_mutex);
 
 		/* Wake the slot handler if the completion queue is full. */
 		up(&instance->remove_event);
@@ -1215,20 +1270,19 @@ vchiq_close(struct cdev *dev, int flags __unused, int fmt __unused,
 			spin_unlock(&msg_queue_spinlock);
 
 			unlock_service(service);
-			kfree(user_service);
 		}
 
 		/* Release any closed services */
 		while (instance->completion_remove !=
 			instance->completion_insert) {
 			VCHIQ_COMPLETION_DATA_T *completion;
-			VCHIQ_SERVICE_T *service;
+			VCHIQ_SERVICE_T *service1;
 			completion = &instance->completions[
 				instance->completion_remove &
 				(MAX_COMPLETIONS - 1)];
-			service = completion->service_userdata;
+			service1 = completion->service_userdata;
 			if (completion->reason == VCHIQ_SERVICE_CLOSED)
-				unlock_service(service);
+				unlock_service(service1);
 			instance->completion_remove++;
 		}
 
@@ -1248,6 +1302,7 @@ vchiq_close(struct cdev *dev, int flags __unused, int fmt __unused,
 					"bulk_waiter - cleaned up %x "
 					"for pid %d",
 					(unsigned int)waiter, waiter->pid);
+		                _sema_destroy(&waiter->bulk_waiter.event);
 				kfree(waiter);
 			}
 		}
@@ -1993,7 +2048,7 @@ output_timeout_error(VCHIQ_STATE_T *state)
 		VCHIQ_SERVICE_T *service_ptr = state->services[i];
 		if (service_ptr && service_ptr->service_use_count &&
 			(service_ptr->srvstate != VCHIQ_SRVSTATE_FREE)) {
-			snprintf(service_err, 50, " %c%c%c%c(%d) service has "
+			snprintf(service_err, 50, " %c%c%c%c(%8x) service has "
 				"use count %d%s", VCHIQ_FOURCC_AS_4CHARS(
 					service_ptr->base.fourcc),
 				 service_ptr->client_id,
@@ -2285,10 +2340,10 @@ vchiq_use_internal(VCHIQ_STATE_T *state, VCHIQ_SERVICE_T *service,
 	vchiq_log_trace(vchiq_susp_log_level, "%s", __func__);
 
 	if (use_type == USE_TYPE_VCHIQ) {
-		sprintf(entity, "VCHIQ:   ");
+		snprintf(entity, sizeof(entity), "VCHIQ:   ");
 		entity_uc = &arm_state->peer_use_count;
 	} else if (service) {
-		sprintf(entity, "%c%c%c%c:%03d",
+		snprintf(entity, sizeof(entity), "%c%c%c%c:%8x",
 			VCHIQ_FOURCC_AS_4CHARS(service->base.fourcc),
 			service->client_id);
 		entity_uc = &service->service_use_count;
@@ -2417,12 +2472,12 @@ vchiq_release_internal(VCHIQ_STATE_T *state, VCHIQ_SERVICE_T *service)
 	vchiq_log_trace(vchiq_susp_log_level, "%s", __func__);
 
 	if (service) {
-		sprintf(entity, "%c%c%c%c:%03d",
+		snprintf(entity, sizeof(entity), "%c%c%c%c:%8x",
 			VCHIQ_FOURCC_AS_4CHARS(service->base.fourcc),
 			service->client_id);
 		entity_uc = &service->service_use_count;
 	} else {
-		sprintf(entity, "PEER:   ");
+		snprintf(entity, sizeof(entity), "PEER:   ");
 		entity_uc = &arm_state->peer_use_count;
 	}
 
@@ -2434,8 +2489,8 @@ vchiq_release_internal(VCHIQ_STATE_T *state, VCHIQ_SERVICE_T *service)
 		ret = VCHIQ_ERROR;
 		goto unlock;
 	}
-	local_uc = --arm_state->videocore_use_count;
-	local_entity_uc = --(*entity_uc);
+	--arm_state->videocore_use_count;
+	--(*entity_uc);
 
 	if (!vchiq_videocore_wanted(state)) {
 		if (vchiq_platform_use_suspend_timer() &&
@@ -2647,7 +2702,7 @@ vchiq_check_service(VCHIQ_SERVICE_T *service)
 
 	if (ret == VCHIQ_ERROR) {
 		vchiq_log_error(vchiq_susp_log_level,
-			"%s ERROR - %c%c%c%c:%d service count %d, "
+			"%s ERROR - %c%c%c%c:%8x service count %d, "
 			"state count %d, videocore suspend state %s", __func__,
 			VCHIQ_FOURCC_AS_4CHARS(service->base.fourcc),
 			service->client_id, service->service_use_count,
@@ -2680,7 +2735,7 @@ void vchiq_platform_conn_state_changed(VCHIQ_STATE_T *state,
 			write_unlock_bh(&arm_state->susp_res_lock);
 			snprintf(threadname, sizeof(threadname), "VCHIQka-%d",
 				state->id);
-			arm_state->ka_thread = kthread_create(
+			arm_state->ka_thread = vchiq_thread_create(
 				&vchiq_keepalive_thread_func,
 				(void *)state,
 				threadname);
@@ -2716,12 +2771,13 @@ vchiq_init(void)
 #endif
 
 	vchiq_cdev = make_dev(&vchiq_cdevsw, 0,
-		UID_ROOT, GID_WHEEL, 0600, "vchiq");
+	    UID_ROOT, GID_WHEEL, 0600, "vchiq");
 	if (!vchiq_cdev) {
 		printf("Failed to create /dev/vchiq");
 		return (-ENXIO);
 	}
 
+	spin_lock_init(&msg_queue_spinlock);
 
 	err = vchiq_platform_init(&g_state);
 	if (err != 0)

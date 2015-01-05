@@ -149,6 +149,8 @@ bcm_vchiq_attach(device_t dev)
 		return (ENXIO);
 	}
 
+	vchiq_core_initialize();
+
 	/* Setup and enable the timer */
 	if (bus_setup_intr(dev, sc->irq_res, INTR_TYPE_MISC,
 			NULL, bcm_vchiq_intr, sc,

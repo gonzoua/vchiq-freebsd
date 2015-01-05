@@ -34,23 +34,17 @@
 #ifndef VCHIQ_CORE_H
 #define VCHIQ_CORE_H
 
-#ifdef __linux__
-#include <linux/mutex.h>
-#include <linux/semaphore.h>
-#include <linux/kthread.h>
-#endif
-
-#ifdef __FreeBSD__
 #include <interface/compat/vchi_bsd.h>
 #include <interface/compat/list.h>
-#endif
 
 #include "vchiq_cfg.h"
 
 #include "vchiq.h"
 
 /* Run time control of log level, based on KERN_XXX level. */
+#ifndef VCHIQ_LOG_DEFAULT
 #define VCHIQ_LOG_DEFAULT  4
+#endif
 #define VCHIQ_LOG_ERROR    3
 #define VCHIQ_LOG_WARNING  4
 #define VCHIQ_LOG_INFO     6
@@ -244,6 +238,8 @@ typedef enum {
 	VCHIQ_BULK_RECEIVE
 } VCHIQ_BULK_DIR_T;
 
+typedef void (*VCHIQ_USERDATA_TERM_T)(void *userdata);
+
 typedef struct vchiq_bulk_struct {
 	short mode;
 	short dir;
@@ -284,13 +280,14 @@ typedef struct vchiq_slot_info_struct {
 	/* Use two counters rather than one to avoid the need for a mutex. */
 	short use_count;
 	short release_count;
-} __packed VCHIQ_SLOT_INFO_T;
+} __packed VCHIQ_SLOT_INFO_T; /* XXXGONZO: check it */
 
 typedef struct vchiq_service_struct {
 	VCHIQ_SERVICE_BASE_T base;
 	VCHIQ_SERVICE_HANDLE_T handle;
 	unsigned int ref_count;
 	int srvstate;
+	VCHIQ_USERDATA_TERM_T userdata_term;
 	unsigned int localport;
 	unsigned int remoteport;
 	int public_fourcc;
@@ -301,6 +298,7 @@ typedef struct vchiq_service_struct {
 	atomic_t poll_flags;
 	short version;
 	short version_min;
+	short peer_version;
 
 	VCHIQ_STATE_T *state;
 	VCHIQ_INSTANCE_T instance;
@@ -420,13 +418,13 @@ struct vchiq_state_struct {
 	VCHIQ_INSTANCE_T *instance;
 
 	/* Processes incoming messages */
-	struct proc *slot_handler_thread;
+	VCHIQ_THREAD_T slot_handler_thread;
 
 	/* Processes recycled slots */
-	struct proc *recycle_thread;
+	VCHIQ_THREAD_T recycle_thread;
 
 	/* Processes synchronous messages */
-	struct proc *sync_thread;
+	VCHIQ_THREAD_T sync_thread;
 
 	/* Local implementation of the trigger remote event */
 	struct semaphore trigger_event;
@@ -491,6 +489,10 @@ struct vchiq_state_struct {
 	/* Signalled when a free data slot becomes available. */
 	struct semaphore data_quota_event;
 
+	/* Incremented when there are bulk transfers which cannot be processed
+	 * whilst paused and must be processed on resume */
+	int deferred_bulks;
+
 	struct state_stats_struct {
 		int slot_stalls;
 		int data_stalls;
@@ -536,7 +538,7 @@ vchiq_connect_internal(VCHIQ_STATE_T *state, VCHIQ_INSTANCE_T instance);
 extern VCHIQ_SERVICE_T *
 vchiq_add_service_internal(VCHIQ_STATE_T *state,
 	const VCHIQ_SERVICE_PARAMS_T *params, int srvstate,
-	VCHIQ_INSTANCE_T instance);
+	VCHIQ_INSTANCE_T instance, VCHIQ_USERDATA_TERM_T userdata_term);
 
 extern VCHIQ_STATUS_T
 vchiq_open_service_internal(VCHIQ_SERVICE_T *service, int client_id);
@@ -701,5 +703,8 @@ vchiq_set_conn_state(VCHIQ_STATE_T *state, VCHIQ_CONNSTATE_T newstate);
 extern void
 vchiq_log_dump_mem(const char *label, uint32_t addr, const void *voidMem,
 	size_t numBytes);
+
+extern void
+vchiq_core_initialize(void);
 
 #endif

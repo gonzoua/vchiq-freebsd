@@ -1,6 +1,7 @@
 /*-
  * Copyright (c) 2010 Max Khon <fjoe@freebsd.org>
  * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@bluezbox.com>
+ * Copyright (c) 2013 Jared D. McNeill <jmcneill@invisible.ca>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -133,9 +134,8 @@ atomic_xchg(atomic_t *v, int newv)
 typedef struct mtx spinlock_t;
 
 #define DEFINE_SPINLOCK(name)				\
-	struct mtx name;				\
-	MTX_SYSINIT(name, &name, #name, MTX_SPIN)
-#define spin_lock_init(lock)	mtx_init(lock, "VCHI spinlock", NULL, MTX_SPIN)
+	struct mtx name
+#define spin_lock_init(lock)	mtx_init(lock, "VCHI spinlock " # lock, NULL, MTX_SPIN)
 #define spin_lock_destroy(lock)	mtx_destroy(lock)
 #define spin_lock(lock)		mtx_lock_spin(lock)
 #define spin_unlock(lock)	mtx_unlock_spin(lock)
@@ -156,10 +156,11 @@ struct mutex {
 	struct mtx	mtx;
 };
 
-#define	mutex_init(lock)	mtx_init(&(lock)->mtx, #lock, NULL, MTX_DEF)
-#define	mutex_lock(lock)	mtx_lock(&(lock)->mtx)
-#define	mutex_lock_interruptible(lock)	(mtx_lock(&(lock)->mtx),0)
-#define	mutex_unlock(lock)	mtx_unlock(&(lock)->mtx)
+#define	lmutex_init(lock)	mtx_init(&(lock)->mtx, #lock, NULL, MTX_DEF)
+#define lmutex_lock(lock)	mtx_lock(&(lock)->mtx)
+#define	lmutex_lock_interruptible(lock)	(mtx_lock(&(lock)->mtx),0)
+#define	lmutex_unlock(lock)	mtx_unlock(&(lock)->mtx)
+#define	lmutex_destroy(lock)	mtx_destroy(&(lock)->mtx)
 
 /*
  * Rwlock API
@@ -227,11 +228,11 @@ int wait_for_completion_interruptible(struct completion *);
 int wait_for_completion_interruptible_timeout(struct completion *, unsigned long ticks);
 int wait_for_completion_killable(struct completion *);
 void wait_for_completion(struct completion *c);
-int wait_for_completion_timeout(struct completion *c, unsigned long timeout);
 void complete(struct completion *c);
 void complete_all(struct completion *c);
+void INIT_COMPLETION_locked(struct completion *c);
 
-#define	INIT_COMPLETION(x)	do {(x).done = 0;} while(0)
+#define	INIT_COMPLETION(x)	INIT_COMPLETION_locked(&(x))
 
 /*
  * Semaphore API
@@ -351,7 +352,8 @@ MALLOC_DECLARE(M_VCHI);
  */
 #if 1
 /* emulate jiffies */
-static inline unsigned long _jiffies(void)
+static inline unsigned long
+_jiffies(void)
 {
 	struct timeval tv;
 
@@ -359,7 +361,8 @@ static inline unsigned long _jiffies(void)
 	return tvtohz(&tv);
 }
 
-static inline unsigned long msecs_to_jiffies(unsigned long msecs)
+static inline unsigned long
+msecs_to_jiffies(unsigned long msecs)
 {
 	struct timeval tv;
 
@@ -391,17 +394,19 @@ static inline unsigned long msecs_to_jiffies(unsigned long msecs)
 /*
  * kthread API (we use proc)
  */
-struct proc *kthread_create(int (*threadfn)(void *data),
+typedef struct proc * VCHIQ_THREAD_T;
+
+VCHIQ_THREAD_T vchiq_thread_create(int (*threadfn)(void *data),
                                    void *data,
                                    const char namefmt[], ...);
-void set_user_nice(struct proc *p, int nice);
-void wake_up_process(struct proc *p);
+void set_user_nice(VCHIQ_THREAD_T p, int nice);
+void wake_up_process(VCHIQ_THREAD_T p);
 
 /*
  * Proc APIs
  */
-void flush_signals(struct proc *);
-int fatal_signal_pending(struct proc *);
+void flush_signals(VCHIQ_THREAD_T);
+int fatal_signal_pending(VCHIQ_THREAD_T);
 
 /*
  * Misc API
@@ -419,5 +424,14 @@ int fatal_signal_pending(struct proc *);
 
 typedef	void	irqreturn_t;
 typedef	off_t	loff_t;
+
+#define BCM2835_MBOX_CHAN_VCHIQ	3
+#define bcm_mbox_write	bcmmbox_write
+
+#define smp_mb	wmb
+#define smp_rmb	rmb
+#define smp_wmb	wmb
+
+#define device_print_prettyname(dev)	device_printf((dev), "")
 
 #endif /* __VCHI_BSD_H__ */

@@ -144,6 +144,61 @@ destroy_completion(struct completion *c)
 }
 
 void
+complete(struct completion *c)
+{
+	mtx_lock(&c->lock);
+
+	if (c->done >= 0) {
+		KASSERT(c->done < INT_MAX, ("c->done overflow")); /* XXX check */
+		c->done++;
+		cv_signal(&c->cv);
+	} else {
+		KASSERT(c->done == -1, ("Invalid value of c->done: %d", c->done));
+	}
+
+	mtx_unlock(&c->lock);
+}
+
+void
+complete_all(struct completion *c)
+{
+	mtx_lock(&c->lock);
+
+	if (c->done >= 0) {
+		KASSERT(c->done < INT_MAX, ("c->done overflow")); /* XXX check */
+		c->done = -1;
+		cv_broadcast(&c->cv);
+	} else {
+		KASSERT(c->done == -1, ("Invalid value of c->done: %d", c->done));
+	}
+
+	mtx_unlock(&c->lock);
+}
+
+void
+INIT_COMPLETION_locked(struct completion *c)
+{
+	mtx_lock(&c->lock);
+
+	c->done = 0;
+
+	mtx_unlock(&c->lock);
+}
+
+static void
+_completion_claim(struct completion *c)
+{
+
+	KASSERT(mtx_owned(&c->lock),
+	    ("_completion_claim should be called with acquired lock"));
+	KASSERT(c->done != 0, ("_completion_claim on non-waited completion"));
+	if (c->done > 0)
+		c->done--;
+	else
+		KASSERT(c->done == -1, ("Invalid value of c->done: %d", c->done));
+}
+
+void
 wait_for_completion(struct completion *c)
 {
 	mtx_lock(&c->lock);
@@ -167,33 +222,42 @@ try_wait_for_completion(struct completion *c)
 	return res == 0;
 }
 
-
-int
-wait_for_completion_timeout(struct completion *c, unsigned long timeout)
-{
-	int res = 0;
-
-	mtx_lock(&c->lock);
-	if (!c->done)
-		res = cv_timedwait(&c->cv, &c->lock, timeout);
-	if (res == 0)
-		c->done--;
-	mtx_unlock(&c->lock);
-	return res == 0;
-}
-
 int
 wait_for_completion_interruptible_timeout(struct completion *c, unsigned long timeout)
 {
 	int res = 0;
+	unsigned long start, now;
+	start = jiffies;
 
 	mtx_lock(&c->lock);
-	if (!c->done)
+	while (c->done == 0) {
 		res = cv_timedwait_sig(&c->cv, &c->lock, timeout);
-	if (res == 0)
-		c->done--;
+		if (res)
+			goto out;
+		now = jiffies;
+		if (timeout < (now - start)) {
+			res = EWOULDBLOCK;
+			goto out;
+		}
+
+		timeout -= (now - start);
+		start = now;
+	}
+
+	_completion_claim(c);
+	res = 0;
+
+out:
 	mtx_unlock(&c->lock);
-	return res == 0;
+
+	if (res == EWOULDBLOCK) {
+		return 0;
+	} else if ((res == EINTR) || (res == ERESTART)) {
+		return -ERESTART;
+	} else {
+		KASSERT((res == 0), ("res = %d", res));
+		return timeout;
+	}
 }
 
 int
@@ -202,45 +266,27 @@ wait_for_completion_interruptible(struct completion *c)
 	int res = 0;
 
 	mtx_lock(&c->lock);
-	if (!c->done)
+	while (c->done == 0) {
 		res = cv_wait_sig(&c->cv, &c->lock);
-	if (res == 0)
-		c->done--;
+		if (res)
+			goto out;
+	}
+
+	_completion_claim(c);
+
+out:
 	mtx_unlock(&c->lock);
-	return res == 0;
+
+	if ((res == EINTR) || (res == ERESTART))
+		res = -ERESTART;
+	return res;
 }
 
 int
 wait_for_completion_killable(struct completion *c)
 {
-	int res = 0;
 
-	mtx_lock(&c->lock);
-	if (!c->done)
-		res = cv_wait_sig(&c->cv, &c->lock);
-	/* TODO: check actual signals here ? */
-	if (res == 0)
-		c->done--;
-	mtx_unlock(&c->lock);
-	return res == 0;
-}
-
-void
-complete(struct completion *c)
-{
-	mtx_lock(&c->lock);
-	c->done++;
-	cv_signal(&c->cv);
-	mtx_unlock(&c->lock);
-}
-
-void
-complete_all(struct completion *c)
-{
-	mtx_lock(&c->lock);
-	c->done++;
-	cv_broadcast(&c->cv);
-	mtx_unlock(&c->lock);
+	return wait_for_completion_interruptible(c);
 }
 
 /*
@@ -386,13 +432,13 @@ device_rlprintf(int pps, device_t dev, const char *fmt, ...)
  */
 
 void
-flush_signals(struct proc *p)
+flush_signals(VCHIQ_THREAD_T thr)
 {
 	printf("Implement ME: %s\n", __func__);
 }
 
 int
-fatal_signal_pending(struct proc *p)
+fatal_signal_pending(VCHIQ_THREAD_T thr)
 {
 	printf("Implement ME: %s\n", __func__);
 	return (0);
@@ -415,7 +461,7 @@ struct thread_data {
 
 static struct thread_data thread_slots[MAX_THREAD_DATA_SLOTS];
 
-static void 
+static void
 kthread_wrapper(void *data)
 {
 	struct thread_data *slot;
@@ -424,12 +470,12 @@ kthread_wrapper(void *data)
 	slot->threadfn(slot->data);
 }
 
-struct proc *
-kthread_create(int (*threadfn)(void *data),
+VCHIQ_THREAD_T
+vchiq_thread_create(int (*threadfn)(void *data),
 	void *data,
 	const char namefmt[], ...)
 {
-	struct proc *newp;
+	VCHIQ_THREAD_T newp;
 	va_list ap;
 	char name[MAXCOMLEN+1];
 	struct thread_data *slot;
@@ -460,13 +506,13 @@ kthread_create(int (*threadfn)(void *data),
 }
 
 void
-set_user_nice(struct proc *p, int nice)
+set_user_nice(VCHIQ_THREAD_T thr, int nice)
 {
 	/* NOOP */
 }
 
 void
-wake_up_process(struct proc *p)
+wake_up_process(VCHIQ_THREAD_T thr)
 {
 	/* NOOP */
 }

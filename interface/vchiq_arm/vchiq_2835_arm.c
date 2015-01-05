@@ -31,26 +31,6 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef __linux__
-#include <linux/kernel.h>
-#include <linux/types.h>
-#include <linux/errno.h>
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/pagemap.h>
-#include <linux/dma-mapping.h>
-#include <linux/version.h>
-#include <linux/io.h>
-#include <linux/uaccess.h>
-#include <asm/pgtable.h>
-
-#include <mach/irqs.h>
-
-#include <mach/platform.h>
-#include <mach/vcio.h>
-#endif
-
-#ifdef __FreeBSD__
 #include <interface/compat/vchi_bsd.h>
 
 #include <sys/malloc.h>
@@ -70,7 +50,6 @@
 #include <machine/bus.h>
 #include <arm/broadcom/bcm2835/bcm2835_mbox.h>
 #include <arm/broadcom/bcm2835/bcm2835_vcbus.h>
-#endif
 
 MALLOC_DEFINE(M_VCPAGELIST, "vcpagelist", "VideoCore pagelist memory");
 
@@ -346,7 +325,7 @@ vchiq_platform_use_suspend_timer(void)
 void
 vchiq_dump_platform_use_state(VCHIQ_STATE_T *state)
 {
-	vchiq_log_info((vchiq_arm_log_level>=VCHIQ_LOG_INFO),"Suspend timer not in use");
+	vchiq_log_info(vchiq_arm_log_level, "Suspend timer not in use");
 }
 void
 vchiq_platform_handle_timeout(VCHIQ_STATE_T *state)
