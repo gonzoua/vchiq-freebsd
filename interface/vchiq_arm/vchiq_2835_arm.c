@@ -238,7 +238,13 @@ int
 vchiq_copy_from_user(void *dst, const void *src, int size)
 {
 
-	bcopy(src, dst, size);
+	if (((vm_offset_t)(src)) < VM_MIN_KERNEL_ADDRESS) {
+		int error = copyin(src, dst, size);
+		return error ? VCHIQ_ERROR : VCHIQ_SUCCESS;
+	}
+	else
+		bcopy(src, dst, size);
+
 	return 0;
 }
 
