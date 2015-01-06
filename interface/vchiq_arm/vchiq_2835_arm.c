@@ -491,7 +491,9 @@ create_pagelist(char __user *buf, size_t count, unsigned short type,
 							 g_fragments_base);
 	}
 
-	cpu_dcache_wbinv_range((vm_offset_t)pagelist, pagelist_size);
+	/* XXX: optimize? INV operation for read WBINV for write? */
+	cpu_dcache_wbinv_range((vm_offset_t)buf, count);
+
 	bi->pagelist = pagelist;
 
 	return 0;
