@@ -564,6 +564,7 @@ free_pagelist(BULKINFO_T *bi, int actual)
 	vm_page_unhold_pages(pages, num_pages);
 
 	bus_dmamap_unload(bi->pagelist_dma_tag, bi->pagelist_dma_map);
+	bus_dmamem_free(bi->pagelist_dma_tag, bi->pagelist, bi->pagelist_dma_map);
 	bus_dmamap_destroy(bi->pagelist_dma_tag, bi->pagelist_dma_map);
 	bus_dma_tag_destroy(bi->pagelist_dma_tag);
 
