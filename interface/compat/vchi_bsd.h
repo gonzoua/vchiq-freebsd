@@ -135,19 +135,12 @@ typedef struct mtx spinlock_t;
 
 #define DEFINE_SPINLOCK(name)				\
 	struct mtx name
-#define spin_lock_init(lock)	mtx_init(lock, "VCHI spinlock " # lock, NULL, MTX_SPIN)
+#define spin_lock_init(lock)	mtx_init(lock, "VCHI spinlock " # lock, NULL, MTX_DEF)
 #define spin_lock_destroy(lock)	mtx_destroy(lock)
-#define spin_lock(lock)		mtx_lock_spin(lock)
-#define spin_unlock(lock)	mtx_unlock_spin(lock)
+#define spin_lock(lock)		mtx_lock(lock)
+#define spin_unlock(lock)	mtx_unlock(lock)
 #define spin_lock_bh(lock)	spin_lock(lock)
 #define spin_unlock_bh(lock)	spin_unlock(lock)
-#define spin_lock_irqsave(lock, flags)			\
-	do {						\
-		mtx_lock_spin(lock);			\
-		(void) &(flags);			\
-	} while (0)
-#define spin_unlock_irqrestore(lock, flags)		\
-	mtx_unlock_spin(lock)
 
 /*
  * Mutex API
