@@ -73,20 +73,29 @@ static char *g_slot_mem;
 static int g_slot_mem_size;
 vm_paddr_t g_slot_phys;
 /* BSD DMA */
-bus_dma_tag_t dma_tag;
-bus_dmamap_t dma_map;
+bus_dma_tag_t bcm_slots_dma_tag;
+bus_dmamap_t bcm_slots_dma_map;
+
 static FRAGMENTS_T *g_fragments_base;
 static FRAGMENTS_T *g_free_fragments;
 struct semaphore g_free_fragments_sema;
 
 static DEFINE_SEMAPHORE(g_free_fragments_mutex);
 
+typedef struct bulkinfo_struct {
+	PAGELIST_T	*pagelist;
+	bus_dma_tag_t	pagelist_dma_tag;
+	bus_dmamap_t	pagelist_dma_map;
+	void		*buf;
+	size_t		size;
+} BULKINFO_T;
+
 static int
 create_pagelist(char __user *buf, size_t count, unsigned short type,
-                struct proc *p, PAGELIST_T ** ppagelist);
+                struct proc *p, BULKINFO_T *bi);
 
 static void
-free_pagelist(PAGELIST_T *pagelist, int actual);
+free_pagelist(BULKINFO_T *bi, int actual);
 
 static void
 vchiq_dmamap_cb(void *arg, bus_dma_segment_t *segs, int nseg, int err)
@@ -121,17 +130,17 @@ vchiq_platform_init(VCHIQ_STATE_T *state)
 	    g_slot_mem_size + frag_mem_size, 1,		/* maxsize, nsegments */
 	    g_slot_mem_size + frag_mem_size, 0,		/* maxsegsize, flags */
 	    NULL, NULL,		 /* lockfunc, lockarg */
-	    &dma_tag);
+	    &bcm_slots_dma_tag);
 
-	err = bus_dmamem_alloc(dma_tag, (void **)&g_slot_mem,
-	    BUS_DMA_COHERENT | BUS_DMA_WAITOK, &dma_map);
+	err = bus_dmamem_alloc(bcm_slots_dma_tag, (void **)&g_slot_mem,
+	    BUS_DMA_COHERENT | BUS_DMA_WAITOK, &bcm_slots_dma_map);
 	if (err) {
 		vchiq_log_error(vchiq_core_log_level, "Unable to allocate channel memory");
 		err = -ENOMEM;
 		goto failed_alloc;
 	}
 
-	err = bus_dmamap_load(dma_tag, dma_map, g_slot_mem,
+	err = bus_dmamap_load(bcm_slots_dma_tag, bcm_slots_dma_map, g_slot_mem,
 	    g_slot_mem_size + frag_mem_size, vchiq_dmamap_cb,
 	    &g_slot_phys, 0);
 
@@ -184,10 +193,10 @@ vchiq_platform_init(VCHIQ_STATE_T *state)
 failed_vchiq_init:
 failed_init_slots:
 failed_load:
-	bus_dmamap_unload(dma_tag, dma_map);
+	bus_dmamap_unload(bcm_slots_dma_tag, bcm_slots_dma_map);
 failed_alloc:
-	bus_dmamap_destroy(dma_tag, dma_map);
-	bus_dma_tag_destroy(dma_tag);
+	bus_dmamap_destroy(bcm_slots_dma_tag, bcm_slots_dma_map);
+	bus_dma_tag_destroy(bcm_slots_dma_tag);
 
    return err;
 }
@@ -196,11 +205,10 @@ void __exit
 vchiq_platform_exit(VCHIQ_STATE_T *state)
 {
 
-	bus_dmamap_unload(dma_tag, dma_map);
-	bus_dmamap_destroy(dma_tag, dma_map);
-	bus_dma_tag_destroy(dma_tag);
+	bus_dmamap_unload(bcm_slots_dma_tag, bcm_slots_dma_map);
+	bus_dmamap_destroy(bcm_slots_dma_tag, bcm_slots_dma_map);
+	bus_dma_tag_destroy(bcm_slots_dma_tag);
 }
-
 
 VCHIQ_STATUS_T
 vchiq_platform_init_state(VCHIQ_STATE_T *state)
@@ -239,25 +247,29 @@ vchiq_prepare_bulk_data(VCHIQ_BULK_T *bulk, VCHI_MEM_HANDLE_T memhandle,
 	void *offset, int size, int dir)
 {
 	PAGELIST_T *pagelist;
+	BULKINFO_T *bi;
 	int ret;
 
 	WARN_ON(memhandle != VCHI_MEM_HANDLE_INVALID);
+	bi = malloc(sizeof(*bi), M_VCPAGELIST, M_WAITOK | M_ZERO);
+	if (bi == NULL)
+		return VCHIQ_ERROR;
 
 	ret = create_pagelist((char __user *)offset, size,
 			(dir == VCHIQ_BULK_RECEIVE)
 			? PAGELIST_READ
 			: PAGELIST_WRITE,
 			current,
-			&pagelist);
+			bi);
 	if (ret != 0)
 		return VCHIQ_ERROR;
 
 	bulk->handle = memhandle;
-	bulk->data = VCHIQ_ARM_ADDRESS(pagelist);
+	bulk->data = VCHIQ_ARM_ADDRESS(bi->pagelist);
 
 	/* Store the pagelist address in remote_data, which isn't used by the
 	   slave. */
-	bulk->remote_data = pagelist;
+	bulk->remote_data = bi;
 
 	return VCHIQ_SUCCESS;
 }
@@ -266,7 +278,7 @@ void
 vchiq_complete_bulk(VCHIQ_BULK_T *bulk)
 {
 	if (bulk && bulk->remote_data && bulk->actual)
-		free_pagelist((PAGELIST_T *)bulk->remote_data, bulk->actual);
+		free_pagelist((BULKINFO_T *)bulk->remote_data, bulk->actual);
 }
 
 void
@@ -351,28 +363,63 @@ vchiq_platform_handle_timeout(VCHIQ_STATE_T *state)
 
 static int
 create_pagelist(char __user *buf, size_t count, unsigned short type,
-	struct proc *p, PAGELIST_T ** ppagelist)
+	struct proc *p, BULKINFO_T *bi)
 {
 	PAGELIST_T *pagelist;
 	vm_page_t* pages;
 	unsigned long *addrs;
-	unsigned int num_pages, offset, i;
+	unsigned int num_pages, i;
+	vm_offset_t offset;
 	int pagelist_size;
 	char *addr, *base_addr, *next_addr;
 	int run, addridx, actual_pages;
+	int err;
+	vm_paddr_t pagelist_phys;
 
-	offset = (unsigned int)buf & (PAGE_SIZE - 1);
+	offset = (vm_offset_t)buf & (PAGE_SIZE - 1);
 	num_pages = (count + offset + PAGE_SIZE - 1) / PAGE_SIZE;
 
-	*ppagelist = NULL;
+	bi->pagelist = NULL;
+	bi->buf = buf;
+	bi->size = count;
 
 	/* Allocate enough storage to hold the page pointers and the page
 	** list
 	*/
 	pagelist_size = sizeof(PAGELIST_T) +
 		(num_pages * sizeof(unsigned long)) +
-		(num_pages * sizeof(vm_page_t));
-	pagelist = malloc(pagelist_size, M_VCPAGELIST, M_WAITOK | M_ZERO);
+		(num_pages * sizeof(pages[0]));
+
+	err = bus_dma_tag_create(
+	    NULL,
+	    PAGE_SIZE, 0,	       /* alignment, boundary */
+	    BUS_SPACE_MAXADDR_32BIT,    /* lowaddr */
+	    BUS_SPACE_MAXADDR,	  /* highaddr */
+	    NULL, NULL,		 /* filter, filterarg */
+	    pagelist_size, 1,		/* maxsize, nsegments */
+	    pagelist_size, 0,		/* maxsegsize, flags */
+	    NULL, NULL,		 /* lockfunc, lockarg */
+	    &bi->pagelist_dma_tag);
+
+
+
+	err = bus_dmamem_alloc(bi->pagelist_dma_tag, (void **)&pagelist,
+	    BUS_DMA_COHERENT | BUS_DMA_WAITOK, &bi->pagelist_dma_map);
+	if (err) {
+		vchiq_log_error(vchiq_core_log_level, "Unable to allocate pagelist memory");
+		err = -ENOMEM;
+		goto failed_alloc;
+	}
+
+	err = bus_dmamap_load(bi->pagelist_dma_tag, bi->pagelist_dma_map, pagelist,
+	    pagelist_size, vchiq_dmamap_cb,
+	    &pagelist_phys, 0);
+
+	if (err) {
+		vchiq_log_error(vchiq_core_log_level, "cannot load DMA map for pagelist memory");
+		err = -ENOMEM;
+		goto failed_load;
+	}
 
 	vchiq_log_trace(vchiq_arm_log_level,
 		"create_pagelist - %x", (unsigned int)pagelist);
@@ -386,12 +433,11 @@ create_pagelist(char __user *buf, size_t count, unsigned short type,
 	    (vm_offset_t)buf, count,
 	    (type == PAGELIST_READ ? VM_PROT_WRITE : 0 ) | VM_PROT_READ, pages, num_pages);
 
-   if (actual_pages != num_pages)
-   {
-      vm_page_unhold_pages(pages, actual_pages);
-      free(pagelist, M_VCPAGELIST);
-      return (-ENOMEM);
-   }
+	if (actual_pages != num_pages) {
+		vm_page_unhold_pages(pages, actual_pages);
+		free(pagelist, M_VCPAGELIST);
+		return (-ENOMEM);
+	}
 
 	pagelist->length = count;
 	pagelist->type = type;
@@ -446,17 +492,28 @@ create_pagelist(char __user *buf, size_t count, unsigned short type,
 	}
 
 	cpu_dcache_wbinv_range((vm_offset_t)pagelist, pagelist_size);
-	*ppagelist = pagelist;
+	bi->pagelist = pagelist;
 
 	return 0;
+
+failed_load:
+	bus_dmamap_unload(bi->pagelist_dma_tag, bi->pagelist_dma_map);
+failed_alloc:
+	bus_dmamap_destroy(bi->pagelist_dma_tag, bi->pagelist_dma_map);
+	bus_dma_tag_destroy(bi->pagelist_dma_tag);
+
+	return err;
 }
 
 static void
-free_pagelist(PAGELIST_T *pagelist, int actual)
+free_pagelist(BULKINFO_T *bi, int actual)
 {
 	vm_page_t*pages;
 	unsigned int num_pages, i;
 	void *page_address;
+	PAGELIST_T *pagelist;
+
+	pagelist = bi->pagelist;
 
 	vchiq_log_trace(vchiq_arm_log_level,
 		"free_pagelist - %x, %d", (unsigned int)pagelist, actual);
@@ -477,31 +534,20 @@ free_pagelist(PAGELIST_T *pagelist, int actual)
 		tail_bytes = (pagelist->offset + actual) &
 			(CACHE_LINE_SIZE - 1);
 
-		if (actual >= 0) {
-			/* XXXBSD: might be inefficient */
-			page_address = pmap_mapdev(VM_PAGE_TO_PHYS(pages[0]), PAGE_SIZE*num_pages);
-		}
-		else 
-			page_address = NULL;
 		if ((actual >= 0) && (head_bytes != 0)) {
 			if (head_bytes > actual)
 				head_bytes = actual;
 
-			memcpy((char *)page_address +
-				pagelist->offset,
+			memcpy((char *)bi->buf,
 				fragments->headbuf,
 				head_bytes);
 		}
+
 		if ((actual >= 0) && (head_bytes < actual) &&
 			(tail_bytes != 0)) {
-			memcpy((char *)page_address + PAGE_SIZE*(num_pages - 1) +
-					 ((pagelist->offset + actual) & (PAGE_SIZE -
-								1) & ~(CACHE_LINE_SIZE - 1)),
+			memcpy((char *)bi->buf + actual - tail_bytes, 
 					 fragments->tailbuf, tail_bytes);
 		}
-
-		if (page_address)
-			pmap_qremove((vm_offset_t)page_address, PAGE_SIZE*num_pages);
 
 		down(&g_free_fragments_mutex);
 		*(FRAGMENTS_T **) fragments = g_free_fragments;
@@ -517,5 +563,9 @@ free_pagelist(PAGELIST_T *pagelist, int actual)
 
 	vm_page_unhold_pages(pages, num_pages);
 
-	free(pagelist, M_VCPAGELIST);
+	bus_dmamap_unload(bi->pagelist_dma_tag, bi->pagelist_dma_map);
+	bus_dmamap_destroy(bi->pagelist_dma_tag, bi->pagelist_dma_map);
+	bus_dma_tag_destroy(bi->pagelist_dma_tag);
+
+	free(bi, M_VCPAGELIST);
 }
