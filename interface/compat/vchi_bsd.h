@@ -46,8 +46,8 @@
 /*
  * Copy from/to user API
  */
-#define copy_from_user(to, from, n)	(bcopy((from), (to), (n)), 0)
-#define copy_to_user(to, from, n)	(bcopy((from), (to), (n)), 0)
+#define copy_from_user(to, from, n)	copyin((from), (to), (n))
+#define copy_to_user(to, from, n)	copyout((from), (to), (n))
 
 /*
  * Bit API

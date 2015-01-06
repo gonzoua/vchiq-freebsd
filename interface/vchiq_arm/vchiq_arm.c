@@ -462,12 +462,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 		void *userdata;
 		int srvstate;
 
-		if (copy_from_user
-			 (&args, (const void __user *)arg,
-			  sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 
 		user_service = kmalloc(sizeof(USER_SERVICE_T), GFP_KERNEL);
 		if (!user_service) {
@@ -525,15 +520,11 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 #ifdef VCHIQ_IOCTL_DEBUG
 			printf("%s: [CREATE SERVICE] handle = %08x\n", __func__, service->handle);
 #endif
-			if (copy_to_user((void __user *)
-				&(((VCHIQ_CREATE_SERVICE_T __user *)
+			memcpy((void *)
+				&(((VCHIQ_CREATE_SERVICE_T*)
 					arg)->handle),
 				(const void *)&service->handle,
-				sizeof(service->handle)) != 0) {
-				ret = -EFAULT;
-				vchiq_remove_service(service->handle);
-				kfree(user_service);
-			}
+				sizeof(service->handle));
 
 			service = NULL;
 		} else {
@@ -545,12 +536,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	case VCHIQ_IOC_CLOSE_SERVICE: {
 		VCHIQ_SERVICE_HANDLE_T handle;
 
-		if (copy_from_user
-			 (&handle, (const void __user *)arg,
-			  sizeof(handle)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&handle, (const void*)arg, sizeof(handle));
 
 #ifdef VCHIQ_IOCTL_DEBUG
 		printf("%s: [CLOSE SERVICE] handle = %08x\n", __func__, handle);
@@ -566,12 +552,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	case VCHIQ_IOC_REMOVE_SERVICE: {
 		VCHIQ_SERVICE_HANDLE_T handle;
 
-		if (copy_from_user
-			 (&handle, (const void __user *)arg,
-			  sizeof(handle)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&handle, (const void*)arg, sizeof(handle));
 
 #ifdef VCHIQ_IOCTL_DEBUG
 		printf("%s: [REMOVE SERVICE] handle = %08x\n", __func__, handle);
@@ -588,12 +569,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	case VCHIQ_IOC_RELEASE_SERVICE:	{
 		VCHIQ_SERVICE_HANDLE_T handle;
 
-		if (copy_from_user
-			 (&handle, (const void __user *)arg,
-			  sizeof(handle)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&handle, (const void*)arg, sizeof(handle));
 
 #ifdef VCHIQ_IOCTL_DEBUG
 		printf("%s: [%s SERVICE] handle = %08x\n", __func__,
@@ -625,12 +601,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 	case VCHIQ_IOC_QUEUE_MESSAGE: {
 		VCHIQ_QUEUE_MESSAGE_T args;
-		if (copy_from_user
-			 (&args, (const void __user *)arg,
-			  sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 
 #ifdef VCHIQ_IOCTL_DEBUG
 		printf("%s: [QUEUE MESSAGE] handle = %08x\n", __func__, args.handle);
@@ -661,12 +632,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			(cmd == VCHIQ_IOC_QUEUE_BULK_TRANSMIT) ?
 			VCHIQ_BULK_TRANSMIT : VCHIQ_BULK_RECEIVE;
 
-		if (copy_from_user
-			(&args, (const void __user *)arg,
-			sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 
 		service = find_service_for_instance(instance, args.handle);
 		if (!service) {
@@ -739,12 +705,11 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 				"saved bulk_waiter %x for pid %d",
 				(unsigned int)waiter, current->p_pid);
 
-			if (copy_to_user((void __user *)
-				&(((VCHIQ_QUEUE_BULK_TRANSFER_T __user *)
+			memcpy((void *)
+				&(((VCHIQ_QUEUE_BULK_TRANSFER_T *)
 					arg)->mode),
 				(const void *)&mode_waiting,
-				sizeof(mode_waiting)) != 0)
-				ret = -EFAULT;
+				sizeof(mode_waiting));
 		}
 	} break;
 
@@ -757,11 +722,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			break;
 		}
 
-		if (copy_from_user(&args, (const void __user *)arg,
-			sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 
 		lmutex_lock(&instance->completion_mutex);
 
@@ -881,24 +842,18 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			}
 
 			if (msgbufcount != args.msgbufcount) {
-				if (copy_to_user((void __user *)
+				memcpy((void __user *)
 					&((VCHIQ_AWAIT_COMPLETION_T *)arg)->
 						msgbufcount,
 					&msgbufcount,
-					sizeof(msgbufcount)) != 0) {
-					ret = -EFAULT;
-				}
+					sizeof(msgbufcount));
 			}
 
 			 if (count != args.count)
 			 {
-				if (copy_to_user((void __user *)
+				memcpy((void __user *)
 					&((VCHIQ_AWAIT_COMPLETION_T *)arg)->count,
-					&count, sizeof(count)) != 0)
-				{
-					ret = -EFAULT;
-					break;
-				}
+					&count, sizeof(count));
 			}
 		}
 
@@ -925,12 +880,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 		VCHIQ_HEADER_T *header;
 
 		DEBUG_TRACE(DEQUEUE_MESSAGE_LINE);
-		if (copy_from_user
-			 (&args, (const void __user *)arg,
-			  sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 		service = find_service_for_instance(instance, args.handle);
 		if (!service) {
 			ret = -EINVAL;
@@ -987,12 +937,8 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 				header->data,
 				header->size) == 0)) {
 				args.bufsize = header->size;
-				if (copy_to_user
-				    ((void __user *)arg, &args,
-				    sizeof(args)) != 0) {
-					ret = -EFAULT;
-					break;
-				}
+				memcpy((void *)arg, &args,
+				    sizeof(args));
 				vchiq_release_message(
 					service->handle,
 					header);
@@ -1012,12 +958,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	case VCHIQ_IOC_GET_CLIENT_ID: {
 		VCHIQ_SERVICE_HANDLE_T handle;
 
-		if (copy_from_user
-			 (&handle, (const void __user *)arg,
-			  sizeof(handle)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&handle, (const void*)arg, sizeof(handle));
 
 		ret = vchiq_get_client_id(handle);
 	} break;
@@ -1026,11 +967,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 		VCHIQ_GET_CONFIG_T args;
 		VCHIQ_CONFIG_T config;
 
-		if (copy_from_user(&args, (const void __user *)arg,
-			sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 		if (args.config_size > sizeof(config)) {
 			ret = -EINVAL;
 			break;
@@ -1048,12 +985,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	case VCHIQ_IOC_SET_SERVICE_OPTION: {
 		VCHIQ_SET_SERVICE_OPTION_T args;
 
-		if (copy_from_user(
-			&args, (const void __user *)arg,
-			sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 
 		service = find_service_for_instance(instance, args.handle);
 		if (!service) {
@@ -1068,12 +1000,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 	case VCHIQ_IOC_DUMP_PHYS_MEM: {
 		VCHIQ_DUMP_MEM_T  args;
 
-		if (copy_from_user
-			 (&args, (const void __user *)arg,
-			  sizeof(args)) != 0) {
-			ret = -EFAULT;
-			break;
-		}
+		memcpy(&args, (const void*)arg, sizeof(args));
 		printf("IMPLEMENT ME: %s:%d\n", __FILE__, __LINE__);
 #if 0
 		dump_phys_mem(args.virt_addr, args.num_bytes);
@@ -1342,9 +1269,7 @@ vchiq_dump(void *dump_context, const char *str, int len)
 		copy_bytes = min(len, (int)(context->space - context->actual));
 		if (copy_bytes == 0)
 			return;
-		if (copy_to_user(context->buf + context->actual, str,
-			copy_bytes))
-			context->actual = -EFAULT;
+		memcpy(context->buf + context->actual, str, copy_bytes);
 		context->actual += copy_bytes;
 		len -= copy_bytes;
 
@@ -1353,9 +1278,7 @@ vchiq_dump(void *dump_context, const char *str, int len)
 		** carriage return. */
 		if ((len == 0) && (str[copy_bytes - 1] == '\0')) {
 			char cr = '\n';
-			if (copy_to_user(context->buf + context->actual - 1,
-				&cr, 1))
-				context->actual = -EFAULT;
+			memcpy(context->buf + context->actual - 1, &cr, 1);
 		}
 	}
 }
