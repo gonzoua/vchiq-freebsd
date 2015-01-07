@@ -9,8 +9,6 @@ SRCS+=		vchiq_arm.c vchiq_connected.c
 SRCS+=	    	vchi_bsd.c vchiq_kmod.c
 SRCS+=	    	device_if.h bus_if.h ofw_bus_if.h mbox_if.h
 
-MFILES+=	dev/mbox/mbox_if.m
-
 CFLAGS+=	-I${.CURDIR}/interface  -DVCOS_VERIFY_BKPTS=1 -DUSE_VCHIQ_ARM -D__VCCOREVER__=0x04000000
 CWARNFLAGS=
 
