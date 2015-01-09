@@ -193,6 +193,10 @@ static device_method_t bcm_vchiq_methods[] = {
 	DEVMETHOD(device_probe,		bcm_vchiq_probe),
 	DEVMETHOD(device_attach,	bcm_vchiq_attach),
 	DEVMETHOD(device_detach,	bcm_vchiq_detach),
+
+        /* Bus interface */
+        DEVMETHOD(bus_add_child,        bus_generic_add_child),
+
 	{ 0, 0 }
 };
 
@@ -205,3 +209,4 @@ static driver_t bcm_vchiq_driver = {
 static devclass_t bcm_vchiq_devclass;
 
 DRIVER_MODULE(vchiq, simplebus, bcm_vchiq_driver, bcm_vchiq_devclass, 0, 0);
+MODULE_VERSION(vchiq, 1);
