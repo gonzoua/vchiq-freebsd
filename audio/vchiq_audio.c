@@ -39,6 +39,10 @@
 
 SND_DECLARE_FILE("vchiq_audio.c");
 
+#define	DEST_AUTO		0
+#define	DEST_HEADPHONES		1
+#define	DEST_HDMI		2
+
 #define	VCHIQ_AUDIO_PACKET_SIZE	4000
 #define	VCHIQ_AUDIO_BUFFER_SIZE	128000
 
@@ -89,8 +93,10 @@ struct vchiq_audio_chinfo {
 };
 
 struct vchiq_audio_info {
+	device_t dev;
 	unsigned int bufsz;
     	struct vchiq_audio_chinfo pch;
+	uint32_t dest, volume;
 	struct mtx *lock;
 
 	/* VCHI data */
@@ -118,6 +124,27 @@ struct vchiq_audio_info {
 
 #define VCHIQ_VCHI_LOCK(sc)		mtx_lock(&(sc)->vchi_lock)
 #define VCHIQ_VCHI_UNLOCK(sc)		mtx_unlock(&(sc)->vchi_lock)
+
+static const char *
+dest_description(uint32_t dest)
+{
+	switch (dest) {
+		case DEST_AUTO:
+			return "AUTO";
+			break;
+
+		case DEST_HEADPHONES:
+			return "HEADPHONES";
+			break;
+
+		case DEST_HDMI:
+			return "HDMI";
+			break;
+		default:
+			return "UNKNOWN";
+			break;
+	}
+}
 
 static void
 vchiq_audio_callback(void *param, const VCHI_CALLBACK_REASON_T reason, void *msg_handle)
@@ -299,7 +326,7 @@ vchiq_audio_open(struct vchiq_audio_info *sc)
 }
 
 static void
-vchiq_audio_set_volume(struct vchiq_audio_info *sc, uint32_t volume)
+vchiq_audio_update_controls(struct vchiq_audio_info *sc)
 {
 	VC_AUDIO_MSG_T m;
 	int32_t success;
@@ -311,10 +338,10 @@ vchiq_audio_set_volume(struct vchiq_audio_info *sc, uint32_t volume)
 	sc->msg_result = -1;
 
 	m.type = VC_AUDIO_MSG_TYPE_CONTROL;
-	m.u.control.dest = 0;
-	if (volume > 99)
-		volume = 99;
-	db = db_levels[volume/5];
+	m.u.control.dest = sc->dest;
+	if (sc->volume > 99)
+		sc->volume = 99;
+	db = db_levels[sc->volume/5];
 	m.u.control.volume = VCHIQ_AUDIO_VOLUME(db);
 
 	ret = vchi_msg_queue(sc->vchi_handle,
@@ -680,7 +707,8 @@ bcmmix_set(struct snd_mixer *m, unsigned dev, unsigned left, unsigned right)
 
 	switch (dev) {
 	case SOUND_MIXER_VOLUME:
-		vchiq_audio_set_volume(sc, left);
+		sc->volume = left;
+		vchiq_audio_update_controls(sc);
 		break;
 
 	default:
@@ -697,6 +725,47 @@ static kobj_method_t bcmmixer_methods[] = {
 };
 
 MIXER_DECLARE(bcmmixer);
+
+static int
+sysctl_vchiq_audio_dest(SYSCTL_HANDLER_ARGS)
+{
+	struct vchiq_audio_info *sc = arg1;
+	int val;
+	int err;
+
+	val = sc->dest;
+	err = sysctl_handle_int(oidp, &val, 0, req);
+	if (err || !req->newptr) /* error || read request */
+		return (err);
+
+	if ((val < 0) || (val > 2))
+		return (EINVAL);
+
+	sc->dest = val;
+	device_printf(sc->dev, "destination set to %s\n", dest_description(val));
+	vchiq_audio_update_controls(sc);
+
+	return (0);
+}
+
+static void
+vchi_audio_sysctl_init(struct vchiq_audio_info *sc)
+{
+	struct sysctl_ctx_list *ctx;
+	struct sysctl_oid *tree_node;
+	struct sysctl_oid_list *tree;
+
+	/*
+	 * Add system sysctl tree/handlers.
+	 */
+	ctx = device_get_sysctl_ctx(sc->dev);
+	tree_node = device_get_sysctl_tree(sc->dev);
+	tree = SYSCTL_CHILDREN(tree_node);
+	SYSCTL_ADD_PROC(ctx, tree, OID_AUTO, "dest",
+	    CTLFLAG_RW | CTLTYPE_UINT, sc, sizeof(*sc),
+	    sysctl_vchiq_audio_dest, "IU", "audio destination, "
+	    "0 - auto, 1 - headphones, 2 - HDMI");
+}
 
 static void
 vchiq_audio_identify(driver_t *driver, device_t parent)
@@ -722,13 +791,16 @@ vchiq_audio_attach(device_t dev)
 
 	sc = malloc(sizeof(*sc), M_DEVBUF, M_WAITOK | M_ZERO);
 
+	sc->dev = dev;
 	sc->bufsz = VCHIQ_AUDIO_BUFFER_SIZE;
 
 	sc->lock = snd_mtxcreate(device_get_nameunit(dev), "vchiq_audio softc");
 
 	vchiq_audio_init(sc);
 	vchiq_audio_open(sc);
-	vchiq_audio_set_volume(sc, 75);
+	sc->volume = 75;
+	sc->dest = DEST_AUTO;
+	vchiq_audio_update_controls(sc);
 
     	if (mixer_init(dev, &bcmmixer_class, sc))
 		goto no;
@@ -743,6 +815,8 @@ vchiq_audio_attach(device_t dev)
 
 	vchiq_audio_reset_channel(&sc->pch);
 	vchiq_audio_create_worker(sc);
+
+	vchi_audio_sysctl_init(sc);
 
     	return 0;
 
