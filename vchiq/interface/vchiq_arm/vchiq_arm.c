@@ -715,6 +715,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 	case VCHIQ_IOC_AWAIT_COMPLETION: {
 		VCHIQ_AWAIT_COMPLETION_T args;
+		int count = 0;
 
 		DEBUG_TRACE(AWAIT_COMPLETION_LINE);
 		if (!instance->connected) {
@@ -751,7 +752,6 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 
 		if (ret == 0) {
 			int msgbufcount = args.msgbufcount;
-			int count;
 			for (count = 0; count < args.count; count++) {
 				VCHIQ_COMPLETION_DATA_T *completion;
 				VCHIQ_SERVICE_T *service1;
@@ -857,7 +857,7 @@ vchiq_ioctl(struct cdev *cdev, u_long cmd, caddr_t arg, int fflag,
 			}
 		}
 
-		if (ret != 0)
+		if (count != 0)
 			up(&instance->remove_event);
 
 		if ((ret == 0) && instance->closing)
