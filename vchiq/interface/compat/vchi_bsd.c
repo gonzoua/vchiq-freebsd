@@ -217,9 +217,9 @@ try_wait_for_completion(struct completion *c)
 
 	mtx_lock(&c->lock);
 	if (!c->done)
-		c->done--;
-	else
 		res = 1;
+	else
+		c->done--;
 	mtx_unlock(&c->lock);
 	return res == 0;
 }
