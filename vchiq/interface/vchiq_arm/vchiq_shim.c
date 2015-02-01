@@ -738,7 +738,7 @@ int32_t vchi_get_peer_version( const VCHI_SERVICE_HANDLE_T handle, short *peer_v
 }
 EXPORT_SYMBOL(vchi_get_peer_version);
 
-#if notyet
+#ifdef notyet
 /* ----------------------------------------------------------------------
  * read a uint32_t from buffer.
  * network format is defined to be little endian
