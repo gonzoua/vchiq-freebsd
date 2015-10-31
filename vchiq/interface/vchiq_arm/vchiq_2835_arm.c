@@ -109,6 +109,22 @@ vchiq_dmamap_cb(void *arg, bus_dma_segment_t *segs, int nseg, int err)
 	*addr = PHYS_TO_VCBUS(segs[0].ds_addr);
 }
 
+static int
+copyout_page(vm_page_t p, size_t offset, void *kaddr, size_t size)
+{
+        uint8_t *dst;
+
+        dst = pmap_mapdev(VM_PAGE_TO_PHYS(p), PAGE_SIZE);
+        if (!dst)
+                return ENOMEM;
+
+        memcpy(dst + offset, kaddr, size);
+
+        pmap_unmapdev((vm_offset_t)dst, PAGE_SIZE);
+
+        return 0;
+}
+
 int __init
 vchiq_platform_init(VCHIQ_STATE_T *state)
 {
@@ -353,6 +369,16 @@ vchiq_platform_handle_timeout(VCHIQ_STATE_T *state)
  * Local functions
  */
 
+static void
+pagelist_page_free(vm_page_t pp)
+{
+	vm_page_lock(pp);
+	vm_page_unwire(pp, PQ_INACTIVE);
+	if (pp->wire_count == 0 && pp->object == NULL)
+		vm_page_free(pp);
+	vm_page_unlock(pp);
+}
+
 /* There is a potential problem with partial cache lines (pages?)
 ** at the ends of the block when reading. If the CPU accessed anything in
 ** the same line (page?) then it may have pulled old data into the cache,
@@ -406,8 +432,6 @@ create_pagelist(char __user *buf, size_t count, unsigned short type,
 	    NULL, NULL,		 /* lockfunc, lockarg */
 	    &bi->pagelist_dma_tag);
 
-
-
 	err = bus_dmamem_alloc(bi->pagelist_dma_tag, (void **)&pagelist,
 	    BUS_DMA_COHERENT | BUS_DMA_WAITOK, &bi->pagelist_dma_map);
 	if (err) {
@@ -442,6 +466,13 @@ create_pagelist(char __user *buf, size_t count, unsigned short type,
 		vm_page_unhold_pages(pages, actual_pages);
 		free(pagelist, M_VCPAGELIST);
 		return (-ENOMEM);
+	}
+
+	for (i = 0; i < actual_pages; i++) {
+		vm_page_lock(pages[i]);
+		vm_page_wire(pages[i]);
+		vm_page_unhold(pages[i]);
+		vm_page_unlock(pages[i]);
 	}
 
 	pagelist->length = count;
@@ -496,8 +527,9 @@ create_pagelist(char __user *buf, size_t count, unsigned short type,
 							 g_fragments_base);
 	}
 
-	/* XXX: optimize? INV operation for read WBINV for write? */
 	cpu_dcache_wbinv_range((vm_offset_t)buf, count);
+
+	bus_dmamap_sync(bi->pagelist_dma_tag, bi->pagelist_dma_map, BUS_DMASYNC_PREWRITE);
 
 	bi->pagelist = pagelist;
 
@@ -544,15 +576,19 @@ free_pagelist(BULKINFO_T *bi, int actual)
 			if (head_bytes > actual)
 				head_bytes = actual;
 
-			memcpy((char *)bi->buf,
+			copyout_page(pages[0],
+				pagelist->offset,
 				fragments->headbuf,
 				head_bytes);
 		}
 
 		if ((actual >= 0) && (head_bytes < actual) &&
 			(tail_bytes != 0)) {
-			memcpy((char *)bi->buf + actual - tail_bytes, 
-					 fragments->tailbuf, tail_bytes);
+
+			copyout_page(pages[num_pages-1],
+				(((vm_offset_t)bi->buf + actual) % PAGE_SIZE) - tail_bytes,
+				fragments->tailbuf,
+				tail_bytes);
 		}
 
 		down(&g_free_fragments_mutex);
@@ -563,11 +599,11 @@ free_pagelist(BULKINFO_T *bi, int actual)
 	}
 
 	for (i = 0; i < num_pages; i++) {
-		if (pagelist->type != PAGELIST_WRITE)
+		if (pagelist->type != PAGELIST_WRITE) {
 			vm_page_dirty(pages[i]);
+			pagelist_page_free(pages[i]);
+		}
 	}
-
-	vm_page_unhold_pages(pages, num_pages);
 
 	bus_dmamap_unload(bi->pagelist_dma_tag, bi->pagelist_dma_map);
 	bus_dmamem_free(bi->pagelist_dma_tag, bi->pagelist, bi->pagelist_dma_map);

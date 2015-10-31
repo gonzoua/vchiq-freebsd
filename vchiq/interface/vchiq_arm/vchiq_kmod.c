@@ -110,11 +110,9 @@ remote_event_signal(REMOTE_EVENT_T *event)
 
 	/* The test on the next line also ensures the write on the previous line
 		has completed */
-
 	if (event->armed) {
 		/* trigger vc interrupt */
- 		__asm __volatile ("mcr p15, 0, %0, c7, c10, 4" : : "r" (0) : "memory");
-
+		dsb();
 		vchiq_write_4(0x48, 0);
 	}
 }
@@ -172,6 +170,9 @@ bcm_vchiq_attach(device_t dev)
 	bcm_vchiq_sc = sc;
 
 	vchiq_init();
+
+	bus_generic_probe(dev);
+	bus_generic_attach(dev);
 
 	return (0);
 }
